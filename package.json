@@ -1,0 +1,26 @@
+{
+  "name": "pi-plans",
+  "version": "0.1.0",
+  "description": "Text-based project manager for pi. Plans are living markdown documents with tracked steps, timestamped logs, and lifecycle commands.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lulucatdev/pi-plans.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "planning",
+    "project-management"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}
