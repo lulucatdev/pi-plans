@@ -18,21 +18,21 @@ pi install git:github.com/lulucatdev/pi-plans
 | `/plans` | List all plans with status and progress |
 | `/focus-plan <path>` | Lock onto a plan (enables automatic tracking) |
 | `/unfocus-plan` | Clear focus (stops system prompt injection) |
-| `/finish-plan [summary]` | Mark active plan as completed |
-| `/abort-plan [reason]` | Abort and archive active plan |
-| `/resume-plan <path>` | Restore an archived/paused plan |
+| `/finish-plan [summary]` | Mark active plan as completed, move to `done/` |
+| `/abort-plan [reason]` | Abort active plan, move to `done/` |
+| `/resume-plan <path>` | Restore a plan from `pending/` or `done/` |
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `plan_create` | Create a new plan with goal and steps, auto-focus |
+| `plan_create` | Create a new plan; prompts user to start now, save for later, or give feedback |
 | `plan_update` | Mark steps complete, add steps, log progress/decisions |
-| `plan_finish` | Mark plan completed, optionally archive |
-| `plan_abort` | Abort plan with reason, auto-archive |
-| `plan_resume` | Reactivate a paused/completed/archived plan |
-| `plan_list` | List plans with status filter |
-| `plan_focus` | Set active plan for subsequent operations |
+| `plan_finish` | Mark plan completed, move to `done/` |
+| `plan_abort` | Abort plan with reason, move to `done/` |
+| `plan_resume` | Move a `pending/` or `done/` plan to `active/` |
+| `plan_list` | List plans with status filter (`active`, `pending`, `done`) |
+| `plan_focus` | Move a plan to `active/` (parks current active to `pending/`) |
 
 ## How it works
 
@@ -40,8 +40,9 @@ pi install git:github.com/lulucatdev/pi-plans
 /start-plan refactor auth system        ← user initiates
   agent researches, asks questions
   agent proposes approach, user discusses
-  → plan_create(name, goal, steps)      ← plan file created, auto-focused
-                                           system prompt injection begins
+  → plan_create(name, goal, steps)      ← plan saved to pending/
+                                           user prompted: start now / save / feedback
+  user picks "Start now"                ← moved to active/, system prompt injection begins
 
   agent implements step 1
   → plan_update(complete_step: 1)       ← step marked done, current advances
@@ -51,17 +52,28 @@ pi install git:github.com/lulucatdev/pi-plans
   → plan_update(complete_step: 2, log: "endpoints done")
 
   ...all steps done...
-  → plan_finish(archive: true)          ← archived, focus cleared, injection stops
+  → plan_finish()                       ← moved to done/, injection stops
 ```
 
 ## Plan file format
 
-Plans are stored at `<project>/.pi/plans/YYYYMMDD-HHmm-<slug>.md`:
+Plans live under `<project>/.pi/plans/` in subdirectories that represent their status:
+
+```
+.pi/plans/
+├── active/       ← 0 or 1 plan, the one currently being worked on
+├── pending/      ← plans saved for later
+└── done/         ← completed or aborted plans
+```
+
+Directory = status. No pointer files, no in-file status fields. Moving a file between directories is a state transition.
+
+Example plan at `.pi/plans/active/20260322-1730-auth-refactor.md`:
 
 ```markdown
 # Auth Refactor
 
-> Status: **active** | Created: 2026-03-22 17:30
+> Created: 2026-03-22 17:30
 
 Refactor authentication to support OAuth 2.0 with PKCE flow.
 
