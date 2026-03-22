@@ -1,0 +1,23 @@
+export interface Step {
+	index: number;
+	done: boolean;
+	text: string;
+	isCurrent: boolean;
+	lineNum: number;
+}
+
+export interface Verification {
+	automated?: string[];
+	manual?: string[];
+}
+
+export interface PlanEntry {
+	name: string;
+	path: string;
+	summary: string;
+}
+
+export interface SessionState {
+	focusedPlan: string | undefined;
+	planGate: { planPath: string; satisfied: boolean } | undefined;
+}

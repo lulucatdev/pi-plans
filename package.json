@@ -19,8 +19,17 @@
       "./extensions"
     ]
   },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }
