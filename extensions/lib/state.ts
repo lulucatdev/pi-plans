@@ -50,10 +50,12 @@ export function resolvePlanArg(planPath: string | undefined, cwd: string, focuse
 	return activePlans[0];
 }
 
-/** Extract planPath from a prompt string (for child worker gate). Only matches .pi/plans/ paths. */
+/** Extract planPath from a prompt string (for child worker gate). Only matches .pi/plans/ paths. Handles paths with spaces when backtick-quoted. */
 export function extractPlanPath(prompt: string): string | undefined {
-	const m = prompt.match(/planPath\s*[:=]\s*`?([^\s`]*\.pi\/plans\/[^\s`]*\.md)`?/i)
-		?? prompt.match(/(\/[^\s`"']*\.pi\/plans\/[^\s`"']*\.md)/);
+	const m = prompt.match(/planPath\s*[:=]\s*`([^`]*\.pi\/plans\/[^`]*\.md)`/i)  // backtick-quoted (handles spaces)
+		?? prompt.match(/planPath\s*[:=]\s*([^\s`]*\.pi\/plans\/[^\s`]*\.md)/i)     // unquoted (no spaces)
+		?? prompt.match(/`([^`]*\.pi\/plans\/[^`]*\.md)`/)                          // any backtick-quoted .pi/plans path
+		?? prompt.match(/(\/[^\s`"']*\.pi\/plans\/[^\s`"']*\.md)/);                 // bare absolute path (no spaces)
 	return m?.[1];
 }
 
