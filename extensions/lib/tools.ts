@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { ensureDir, pendingDir, activeDir, doneDir, plansDir, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
-import { renderPlan, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
+import { ensureDir, pendingDir, activeDir, doneDir, plansDir, researchDir, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
+import { renderPlan, renderResearchDoc, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
 import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans } from "./state.js";
 import type { SessionState } from "./types.js";
 
@@ -43,23 +43,23 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_research",
 		label: "plan research",
 		description:
-			"Initiate a research phase at any point during planning or execution. " +
-			"Call this when you need to investigate something before proceeding. " +
-			"Logs the research topic to the active plan (if one exists) and returns methodology guidance. " +
+			"Initiate a research phase. Creates a research document at .pi/plans/research/<plan>/<topic>.md " +
+			"and returns the file path. Write your research findings into this file using the write tool. " +
 			"Available at every stage: before brainstorming, during planning, or mid-execution.",
 		parameters: Type.Object({
 			topic: Type.String({ description: "What you need to research, e.g. 'OAuth 2.0 PKCE flow best practices'" }),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path to log to (default: active plan, if any)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			// Log research to focused/active plan if one exists
+			// Resolve plan for logging and research folder naming
 			let planPath: string | undefined;
+			let planSlug: string | undefined;
+			let planName: string | undefined;
 			if (params.plan_path) {
 				const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
 				validatePlanPath(abs, ctx.cwd);
 				planPath = abs;
 			} else {
-				// Verify focused plan is still active before using it
 				const candidate = session.focusedPlan ?? getActivePlan(ctx.cwd);
 				if (candidate) {
 					const activePlans = getActivePlans(ctx.cwd);
@@ -69,43 +69,56 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				}
 			}
 
+			if (planPath) {
+				planSlug = extractSlugFromPlanPath(planPath);
+				const content = fs.readFileSync(planPath, "utf-8");
+				const titleMatch = content.match(/^# (.+)/m);
+				planName = titleMatch?.[1] ?? planSlug;
+			}
+
+			// Create research document
+			const rDir = researchDir(ctx.cwd, planSlug);
+			ensureDir(rDir);
+			const researchFile = safeDestPath(path.join(rDir, `${slugify(params.topic)}.md`));
+			fs.writeFileSync(researchFile, renderResearchDoc(params.topic, planName), "utf-8");
+
+			// Log to plan
 			if (planPath && fs.existsSync(planPath)) {
+				const relResearch = path.relative(path.dirname(planPath), researchFile);
 				let content = fs.readFileSync(planPath, "utf-8");
-				content = appendLog(content, `Researching: ${params.topic}`);
+				content = appendLog(content, `Researching: ${params.topic} → ${relResearch}`);
 				fs.writeFileSync(planPath, content, "utf-8");
 			}
 
+			const relPath = path.relative(ctx.cwd, researchFile);
 			const guidance = [
 				`## Research: ${params.topic}`,
 				"",
+				`**Research document created:** ${relPath}`,
+				"",
+				"Write your findings into this file as you research. Use the write tool to update it with:",
+				"- Key facts and data points discovered",
+				"- Code patterns and examples found",
+				"- Links to relevant documentation",
+				"- Conclusions and recommendations",
+				"",
 				"### Research Approaches",
 				"",
-				"**Parallel research** — use tasks to investigate multiple areas simultaneously:",
-				"- Spawn tasks for different aspects of the question",
-				"- Each task can explore code, read files, or search the web independently",
-				"- Gather results and synthesize",
-				"",
-				"**Sequential research** — investigate one thing at a time:",
-				"- Read relevant files, grep for patterns, trace code paths",
-				"",
-				"**Web research** — for external knowledge:",
-				"- Use **exa** or **web_search** for docs, APIs, libraries, best practices",
-				"- Use **WebFetch** to read specific URLs",
+				"**Parallel research** — use tasks to investigate multiple areas simultaneously",
+				"**Sequential research** — read files, grep for patterns, trace code paths",
+				"**Web research** — use exa, web_search, or WebFetch for external knowledge",
 				"",
 				"### If Debugging a Problem",
 				"",
-				"Do NOT guess-and-fix. Follow this sequence:",
-				"1. **Root cause investigation** — read the error carefully, reproduce it consistently, check recent changes, trace data flow",
-				"2. **Pattern analysis** — find a working example of similar code, compare against it completely, identify the exact difference",
-				"3. **Hypothesis & test** — form ONE hypothesis, test it by changing ONE variable, verify before continuing",
-				"4. **Implement fix** — single targeted change, then verify the fix actually works",
-				"",
-				"After researching, proceed with your next action. Log key findings with `plan_update(log: \"...\")` before moving on.",
+				"1. **Root cause investigation** — read the error, reproduce consistently, check recent changes",
+				"2. **Pattern analysis** — find working examples, compare, identify the difference",
+				"3. **Hypothesis & test** — one hypothesis, one variable, verify before continuing",
+				"4. **Implement fix** — single targeted change, then verify",
 			].join("\n");
 
 			return {
 				content: [{ type: "text", text: guidance }],
-				details: {},
+				details: { researchFile, planPath },
 			};
 		},
 	});

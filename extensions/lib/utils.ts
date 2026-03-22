@@ -47,6 +47,17 @@ export function doneDir(cwd: string): string {
 	return path.join(plansDir(cwd), "done");
 }
 
+export function researchDir(cwd: string, planSlug?: string): string {
+	return path.join(plansDir(cwd), "research", planSlug ?? "_standalone");
+}
+
+/** Extract slug from plan filename: "20260323-1430-auth-refactor.md" → "auth-refactor" */
+export function extractSlugFromPlanPath(planPath: string): string {
+	const basename = path.basename(planPath, ".md");
+	// Remove YYYYMMDD-HHmm- prefix
+	return basename.replace(/^\d{8}-\d{4}-/, "") || basename;
+}
+
 /** Return a non-conflicting path. If dest exists, appends -2, -3, etc. before .md */
 export function safeDestPath(dest: string): string {
 	if (!fs.existsSync(dest)) return dest;

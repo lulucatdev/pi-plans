@@ -27,7 +27,7 @@ pi install git:github.com/lulucatdev/pi-plans
 | Tool | Description |
 |------|-------------|
 | `plan_focus` | Bind this session to a specific plan. Subsequent tool calls default to it without needing `plan_path`. |
-| `plan_research` | Initiate a research phase at any stage. Logs topic to plan, returns methodology guidance (tasks, exa, web_search). |
+| `plan_research` | Create a research document at `.pi/plans/research/<plan>/<topic>.md`. Write findings into it with the write tool. |
 | `plan_brainstorm` | Ask the user a question via UI dialog (select or free-text). Used for all interaction before `plan_create`. |
 | `plan_create` | Create a new plan; prompts user to start now, save for later, or give feedback |
 | `plan_execute` | Begin execution of the active plan with guidelines (verification, debugging, research, pivot policy) |
@@ -61,7 +61,7 @@ pi install git:github.com/lulucatdev/pi-plans
   agent implements step 1
   → plan_update(complete_step: 1)         ← step done (verified), current advances
   → plan_update(log: "decided on JWT")    ← decision recorded
-  ...if stuck, call plan_research(topic)  ← debugging + research methodology
+  ...if stuck, call plan_research(topic)  ← creates research doc, agent writes findings
   ...all steps done...
 
   Phase 5: Verify
@@ -77,7 +77,11 @@ Plans live under `<project>/.pi/plans/` in subdirectories that represent their s
 .pi/plans/
 ├── active/       ← 0+ plans being worked on (multiple agents can work in parallel)
 ├── pending/      ← plans saved for later
-└── done/         ← completed or aborted plans
+├── done/         ← completed or aborted plans
+└── research/     ← research documents, organized by plan
+    └── <plan-slug>/
+        ├── oauth-best-practices.md
+        └── jwt-vs-session.md
 ```
 
 Directory = status. No pointer files, no in-file status fields. Moving a file between directories is a state transition.

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { slugify, safeDestPath, validatePlanPath } from "../extensions/lib/utils.js";
+import { slugify, safeDestPath, validatePlanPath, extractSlugFromPlanPath } from "../extensions/lib/utils.js";
 
 describe("slugify", () => {
 	it("converts text to lowercase hyphenated slug", () => {
@@ -93,5 +93,15 @@ describe("validatePlanPath", () => {
 			path.join(tmpDir, ".pi", "plans", "active", "test.txt"),
 			tmpDir,
 		)).toThrow("must be .md");
+	});
+});
+
+describe("extractSlugFromPlanPath", () => {
+	it("extracts slug from timestamped filename", () => {
+		expect(extractSlugFromPlanPath("/path/to/20260323-1430-auth-refactor.md")).toBe("auth-refactor");
+	});
+
+	it("returns full basename when no timestamp prefix", () => {
+		expect(extractSlugFromPlanPath("/path/to/my-plan.md")).toBe("my-plan");
 	});
 });

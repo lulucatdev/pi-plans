@@ -152,6 +152,22 @@ export function addStep(content: string, text: string, afterIndex?: number): str
 	return lines.join("\n");
 }
 
+export function renderResearchDoc(topic: string, planName?: string): string {
+	const lines: string[] = [];
+	lines.push(`# Research: ${topic}`);
+	lines.push("");
+	lines.push(`> Date: ${logTs()}`);
+	lines.push(`> Plan: ${planName ?? "standalone"}`);
+	lines.push("");
+	lines.push("## Findings");
+	lines.push("");
+	lines.push("");
+	lines.push("## Conclusion");
+	lines.push("");
+	lines.push("");
+	return lines.join("\n");
+}
+
 export function appendLog(content: string, message: string): string {
 	const trimmed = content.trimEnd();
 	return `${trimmed}\n\n**${logTs()}** — ${message}\n`;

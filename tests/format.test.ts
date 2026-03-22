@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSteps, completeStep, addStep, appendLog, parseManualAcceptance, renderPlan } from "../extensions/lib/format.js";
+import { parseSteps, completeStep, addStep, appendLog, parseManualAcceptance, renderPlan, renderResearchDoc } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -184,5 +184,20 @@ describe("renderPlan", () => {
 	it("omits verification section when empty", () => {
 		const result = renderPlan("T", "G", ["S"]);
 		expect(result).not.toContain("## Verification");
+	});
+});
+
+describe("renderResearchDoc", () => {
+	it("generates research doc with topic and plan name", () => {
+		const result = renderResearchDoc("OAuth best practices", "Auth Refactor");
+		expect(result).toContain("# Research: OAuth best practices");
+		expect(result).toContain("> Plan: Auth Refactor");
+		expect(result).toContain("## Findings");
+		expect(result).toContain("## Conclusion");
+	});
+
+	it("uses 'standalone' when no plan name", () => {
+		const result = renderResearchDoc("General topic");
+		expect(result).toContain("> Plan: standalone");
 	});
 });
