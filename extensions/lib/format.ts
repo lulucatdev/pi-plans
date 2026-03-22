@@ -114,8 +114,8 @@ export function completeStep(content: string, stepIndex: number): string {
 	// Mark the step as done
 	lines[step.lineNum] = `- [x] ${step.text}`;
 
-	// Find next incomplete step and mark it as current
-	const nextIncomplete = steps.find((s) => s.index > stepIndex && !s.done);
+	// Find earliest remaining incomplete step and mark it as current
+	const nextIncomplete = steps.find((s) => s.index !== stepIndex && !s.done);
 	if (nextIncomplete) {
 		const plainText = lines[nextIncomplete.lineNum].match(/^- \[[ xX]\] (.+)/)?.[1]?.replace(/\*\*/g, "").replace(/\s*← current\s*$/, "").trim() || nextIncomplete.text;
 		lines[nextIncomplete.lineNum] = `- [ ] **${plainText}** ← current`;

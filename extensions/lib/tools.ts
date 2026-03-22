@@ -412,6 +412,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			}
 
 			// Log the verification attempt
+			// Clear any previous verification marker before starting new verification
+			content = content.replaceAll("<!-- VERIFIED -->", "");
 			content = appendLog(content, `Verification started. Automated: ${params.automated_results.split("\n")[0]}`);
 			fs.writeFileSync(planPath, content, "utf-8");
 
