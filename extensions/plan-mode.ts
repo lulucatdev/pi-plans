@@ -1,10 +1,10 @@
 /**
  * Plan Mode Extension
  *
- * A text-based project manager. Plans are plain markdown files stored at
- * <project>/.pi/plans/YYYYMMDD-HHmm-<slug>.md with checkbox steps,
- * a status line, and a timestamped log. The agent reads, updates, and
- * tracks the plan as a living document throughout development.
+ * A text-based project manager. Plans are plain markdown files stored under
+ * <project>/.pi/plans/{active,pending,done}/YYYYMMDD-HHmm-<slug>.md with
+ * checkbox steps and a timestamped log. Directory = status. The agent reads,
+ * updates, and tracks the plan as a living document throughout development.
  *
  * Tools:  plan_create, plan_update, plan_list, plan_focus
  * Command: /plans
@@ -54,29 +54,40 @@ function plansDir(cwd: string): string {
 	return path.join(findProjectRoot(cwd), ".pi", "plans");
 }
 
-function activePlanFile(cwd: string): string {
-	return path.join(plansDir(cwd), ".active");
+function activeDir(cwd: string): string {
+	return path.join(plansDir(cwd), "active");
 }
 
-function getActivePlanPath(cwd: string): string | undefined {
-	const f = activePlanFile(cwd);
-	if (!fs.existsSync(f)) return undefined;
-	const content = fs.readFileSync(f, "utf-8").trim();
-	if (!content) return undefined;
-	const abs = path.isAbsolute(content) ? content : path.join(plansDir(cwd), content);
-	return fs.existsSync(abs) ? abs : undefined;
+function pendingDir(cwd: string): string {
+	return path.join(plansDir(cwd), "pending");
 }
 
-function setActivePlan(cwd: string, planPath: string) {
-	ensureDir(plansDir(cwd));
-	fs.writeFileSync(activePlanFile(cwd), planPath, "utf-8");
+function doneDir(cwd: string): string {
+	return path.join(plansDir(cwd), "done");
+}
+
+/** Returns the single plan in active/, or undefined if empty. */
+function getActivePlan(cwd: string): string | undefined {
+	const dir = activeDir(cwd);
+	if (!fs.existsSync(dir)) return undefined;
+	const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
+	return files.length > 0 ? path.join(dir, files[0]) : undefined;
+}
+
+/** Move the current active plan to pending/ (if one exists). */
+function parkActivePlan(cwd: string) {
+	const current = getActivePlan(cwd);
+	if (!current) return;
+	const dest = path.join(pendingDir(cwd), path.basename(current));
+	ensureDir(pendingDir(cwd));
+	fs.renameSync(current, dest);
 }
 
 function resolvePlanArg(planPath: string | undefined, cwd: string): string {
 	if (planPath) {
 		return path.isAbsolute(planPath) ? planPath : path.resolve(cwd, planPath);
 	}
-	const active = getActivePlanPath(cwd);
+	const active = getActivePlan(cwd);
 	if (!active) throw new Error("No active plan. Use plan_focus to set one, or pass plan_path explicitly.");
 	return active;
 }
@@ -85,11 +96,11 @@ function resolvePlanArg(planPath: string | undefined, cwd: string): string {
 // Plan file format
 // ---------------------------------------------------------------------------
 
-function renderPlan(title: string, goal: string, steps: string[], status = "active"): string {
+function renderPlan(title: string, goal: string, steps: string[]): string {
 	const lines: string[] = [];
 	lines.push(`# ${title}`);
 	lines.push("");
-	lines.push(`> Status: **${status}** | Created: ${logTs()}`);
+	lines.push(`> Created: ${logTs()}`);
 	lines.push("");
 	lines.push(goal);
 	lines.push("");
@@ -176,11 +187,13 @@ function appendLog(content: string, message: string): string {
 	return `${trimmed}\n\n**${logTs()}** — ${message}\n`;
 }
 
-function setStatus(content: string, status: string): string {
-	return content.replace(
-		/^(> Status: )\*\*\w+\*\*/m,
-		`$1**${status}**`,
-	);
+/** Derive status from the plan's parent directory name. */
+function statusFromPath(planPath: string): string {
+	const dir = path.basename(path.dirname(planPath));
+	if (dir === "active") return "active";
+	if (dir === "pending") return "pending";
+	if (dir === "done") return "done";
+	return "unknown";
 }
 
 function planSummary(planPath: string): string {
@@ -188,8 +201,7 @@ function planSummary(planPath: string): string {
 	const steps = parseSteps(content);
 	const done = steps.filter((s) => s.done).length;
 	const total = steps.length;
-	const statusMatch = content.match(/^> Status: \*\*(\w+)\*\*/m);
-	const status = statusMatch?.[1] ?? "unknown";
+	const status = statusFromPath(planPath);
 	const titleMatch = content.match(/^# (.+)/m);
 	const title = titleMatch?.[1] ?? path.basename(planPath, ".md");
 	const current = steps.find((s) => s.isCurrent);
@@ -198,20 +210,22 @@ function planSummary(planPath: string): string {
 }
 
 function listAllPlans(cwd: string, statusFilter?: string): { name: string; path: string; summary: string }[] {
-	const dir = plansDir(cwd);
-	if (!fs.existsSync(dir)) return [];
-	const activePath = getActivePlanPath(cwd);
-	return fs.readdirSync(dir)
-		.filter((f) => f.endsWith(".md"))
-		.map((f) => {
+	const dirs = [activeDir(cwd), pendingDir(cwd), doneDir(cwd)];
+	const results: { name: string; path: string; summary: string; isActive: boolean }[] = [];
+
+	for (const dir of dirs) {
+		if (!fs.existsSync(dir)) continue;
+		for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
 			const fullPath = path.join(dir, f);
 			const summary = planSummary(fullPath);
-			const isActive = fullPath === activePath;
-			return { name: f.replace(/\.md$/, ""), path: fullPath, summary, isActive };
-		})
+			const isActive = path.basename(dir) === "active";
+			results.push({ name: f.replace(/\.md$/, ""), path: fullPath, summary, isActive });
+		}
+	}
+
+	return results
 		.filter((p) => !statusFilter || p.summary.startsWith(`[${statusFilter}]`))
 		.sort((a, b) => {
-			// Active plan first, then by name descending (newest timestamp first)
 			if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
 			return b.name.localeCompare(a.name);
 		})
@@ -247,7 +261,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		label: "plan create",
 		description:
 			"Create a new plan document with a goal and numbered steps. " +
-			"The plan is stored at .pi/plans/YYYYMMDD-HHmm-<name>.md and automatically becomes the active plan. " +
+			"The plan is saved and the user is prompted to choose: execute now, save for later, or discuss further. " +
 			"Use after researching the codebase and agreeing on the approach with the user.",
 		parameters: Type.Object({
 			name: Type.String({ description: "Short plan name, e.g. 'auth-refactor'" }),
@@ -255,15 +269,57 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			steps: Type.Array(Type.String(), { description: "Ordered list of implementation steps" }),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const dir = plansDir(ctx.cwd);
+			// Write to pending/ first; user decides what to do next
+			const dir = pendingDir(ctx.cwd);
 			ensureDir(dir);
 			const filename = `${ts()}-${slugify(params.name)}.md`;
 			const planPath = path.join(dir, filename);
 			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 			fs.writeFileSync(planPath, renderPlan(title, params.goal, params.steps), "utf-8");
-			setActivePlan(ctx.cwd, planPath);
+
+			const choice = await ctx.ui.select("Plan created. What next?", [
+				"Start now",
+				"Save for later",
+				"I have feedback",
+			]);
+
+			if (choice === "Start now") {
+				parkActivePlan(ctx.cwd);
+				const dest = path.join(activeDir(ctx.cwd), filename);
+				ensureDir(activeDir(ctx.cwd));
+				fs.renameSync(planPath, dest);
+				return {
+					content: [{ type: "text", text: `Plan created and focused: ${dest}\nProceeding with execution.` }],
+					details: { planPath: dest },
+				};
+			}
+
+			if (choice === "Save for later") {
+				return {
+					content: [{ type: "text", text: `Plan saved for later: ${planPath}\nUse plan_focus or /focus-plan to activate it when ready.` }],
+					details: { planPath },
+				};
+			}
+
+			// "I have feedback" or dismissed — ask for input
+			const feedback = await ctx.ui.input("What would you like to change?", "e.g. step 3 should come before step 2");
+			if (feedback) {
+				pi.sendMessage(
+					{
+						customType: "plan-feedback",
+						content: `The user has feedback on the plan at ${planPath}:\n\n${feedback}\n\nRead the plan, discuss with the user, and update or recreate it.`,
+						display: true,
+					},
+					{ triggerTurn: true },
+				);
+				return {
+					content: [{ type: "text", text: `Plan saved: ${planPath}\nDiscussing feedback with user.` }],
+					details: { planPath },
+				};
+			}
+
 			return {
-				content: [{ type: "text", text: `Created and focused: ${planPath}` }],
+				content: [{ type: "text", text: `Plan saved: ${planPath}` }],
 				details: { planPath },
 			};
 		},
@@ -275,8 +331,8 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		name: "plan_update",
 		label: "plan update",
 		description:
-			"Update the active plan. Can complete a step, add a step, append a log entry, " +
-			"or change the plan status. Multiple actions can be combined in one call. " +
+			"Update the active plan. Can complete a step, add a step, or append a log entry. " +
+			"Multiple actions can be combined in one call. " +
 			"Operates on the focused plan by default.",
 		parameters: Type.Object({
 			complete_step: Type.Optional(Type.Number({
@@ -285,7 +341,6 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			add_step: Type.Optional(Type.String({ description: "Text of a new step to add" })),
 			after_step: Type.Optional(Type.Number({ description: "1-based step number to insert the new step after (default: append at end)" })),
 			log: Type.Optional(Type.String({ description: "A timestamped log entry to append (progress, decisions, notes)" })),
-			status: Type.Optional(Type.String({ description: "New plan status: active, paused, completed, archived" })),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -302,36 +357,6 @@ export default function planModeExtension(pi: ExtensionAPI) {
 				const afterIdx = params.after_step !== undefined ? params.after_step - 1 : undefined;
 				content = addStep(content, params.add_step, afterIdx);
 				actions.push(`added step "${params.add_step}"`);
-			}
-
-			if (params.status) {
-				content = setStatus(content, params.status);
-				actions.push(`status → ${params.status}`);
-
-				// Archive: move to .pi/plans/archive/
-				if (params.status === "archived") {
-					const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-					ensureDir(archiveDir);
-					const dest = path.join(archiveDir, path.basename(planPath));
-					fs.writeFileSync(dest, content, "utf-8");
-					fs.unlinkSync(planPath);
-
-					// Clear active pointer if this was the active plan
-					const activePath = getActivePlanPath(ctx.cwd);
-					if (activePath === planPath) {
-						fs.writeFileSync(activePlanFile(ctx.cwd), "", "utf-8");
-					}
-
-					if (params.log) {
-						content = appendLog(content, params.log);
-						fs.writeFileSync(dest, content, "utf-8");
-					}
-
-					return {
-						content: [{ type: "text", text: `Archived: ${dest}\nActions: ${actions.join(", ")}` }],
-						details: { planPath: dest },
-					};
-				}
 			}
 
 			if (params.log) {
@@ -353,40 +378,25 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		name: "plan_finish",
 		label: "plan finish",
 		description:
-			"Mark the active plan as completed. Logs a completion entry and sets status to completed. " +
-			"Optionally archive it (moves to .pi/plans/archive/).",
+			"Mark the active plan as completed. Logs a completion entry and moves it to done/.",
 		parameters: Type.Object({
 			summary: Type.Optional(Type.String({ description: "Brief completion summary to log" })),
-			archive: Type.Optional(Type.Boolean({ description: "Also archive the plan (default: false)" })),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd);
 			let content = fs.readFileSync(planPath, "utf-8");
 
-			content = setStatus(content, "completed");
 			const logMsg = params.summary ? `Plan completed. ${params.summary}` : "Plan completed.";
 			content = appendLog(content, logMsg);
 
-			if (params.archive) {
-				const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-				ensureDir(archiveDir);
-				const dest = path.join(archiveDir, path.basename(planPath));
-				fs.writeFileSync(dest, content, "utf-8");
-				fs.unlinkSync(planPath);
-				if (getActivePlanPath(ctx.cwd) === planPath) {
-					fs.writeFileSync(activePlanFile(ctx.cwd), "", "utf-8");
-				}
-				return {
-					content: [{ type: "text", text: `Plan completed and archived: ${dest}` }],
-					details: { planPath: dest },
-				};
-			}
-
-			fs.writeFileSync(planPath, content, "utf-8");
+			const dest = path.join(doneDir(ctx.cwd), path.basename(planPath));
+			ensureDir(doneDir(ctx.cwd));
+			fs.writeFileSync(dest, content, "utf-8");
+			fs.unlinkSync(planPath);
 			return {
-				content: [{ type: "text", text: `Plan completed: ${planPath}` }],
-				details: { planPath },
+				content: [{ type: "text", text: `Plan completed: ${dest}` }],
+				details: { planPath: dest },
 			};
 		},
 	});
@@ -397,7 +407,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		name: "plan_abort",
 		label: "plan abort",
 		description:
-			"Abort the active plan. Sets status to aborted, logs the reason, and archives the file.",
+			"Abort the active plan. Logs the reason and moves it to done/.",
 		parameters: Type.Object({
 			reason: Type.Optional(Type.String({ description: "Why the plan was aborted" })),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
@@ -406,20 +416,15 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd);
 			let content = fs.readFileSync(planPath, "utf-8");
 
-			content = setStatus(content, "aborted");
 			const logMsg = params.reason ? `Plan aborted. Reason: ${params.reason}` : "Plan aborted.";
 			content = appendLog(content, logMsg);
 
-			const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-			ensureDir(archiveDir);
-			const dest = path.join(archiveDir, path.basename(planPath));
+			const dest = path.join(doneDir(ctx.cwd), path.basename(planPath));
+			ensureDir(doneDir(ctx.cwd));
 			fs.writeFileSync(dest, content, "utf-8");
 			fs.unlinkSync(planPath);
-			if (getActivePlanPath(ctx.cwd) === planPath) {
-				fs.writeFileSync(activePlanFile(ctx.cwd), "", "utf-8");
-			}
 			return {
-				content: [{ type: "text", text: `Plan aborted and archived: ${dest}` }],
+				content: [{ type: "text", text: `Plan aborted: ${dest}` }],
 				details: { planPath: dest },
 			};
 		},
@@ -431,37 +436,30 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		name: "plan_resume",
 		label: "plan resume",
 		description:
-			"Resume a paused or completed plan. Sets status back to active, logs a resumption entry, " +
-			"and focuses on it. Can also restore an archived plan back to .pi/plans/.",
+			"Resume a pending or done plan. Moves it to active/, logs a resumption entry. " +
+			"If another plan is already active, it is moved to pending/ first.",
 		parameters: Type.Object({
-			plan_path: Type.String({ description: "Path to the plan file (can be in archive/)" }),
+			plan_path: Type.String({ description: "Path to the plan file (in pending/ or done/)" }),
 			reason: Type.Optional(Type.String({ description: "Why the plan is being resumed" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			let planPath = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
+			const planPath = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
 			if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
 
 			let content = fs.readFileSync(planPath, "utf-8");
-			content = setStatus(content, "active");
 			const logMsg = params.reason ? `Plan resumed. ${params.reason}` : "Plan resumed.";
 			content = appendLog(content, logMsg);
 
-			// If in archive/, move back to .pi/plans/
-			const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-			if (planPath.startsWith(archiveDir)) {
-				const dest = path.join(plansDir(ctx.cwd), path.basename(planPath));
-				fs.writeFileSync(dest, content, "utf-8");
-				fs.unlinkSync(planPath);
-				planPath = dest;
-			} else {
-				fs.writeFileSync(planPath, content, "utf-8");
-			}
+			parkActivePlan(ctx.cwd);
+			const dest = path.join(activeDir(ctx.cwd), path.basename(planPath));
+			ensureDir(activeDir(ctx.cwd));
+			fs.writeFileSync(dest, content, "utf-8");
+			fs.unlinkSync(planPath);
 
-			setActivePlan(ctx.cwd, planPath);
-			const summary = planSummary(planPath);
+			const summary = planSummary(dest);
 			return {
-				content: [{ type: "text", text: `Resumed and focused: ${summary}\n${planPath}` }],
-				details: { planPath },
+				content: [{ type: "text", text: `Resumed and focused: ${summary}\n${dest}` }],
+				details: { planPath: dest },
 			};
 		},
 	});
@@ -473,7 +471,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		label: "plan list",
 		description: "List plan documents under .pi/plans/. Shows status, step progress, and current step for each plan.",
 		parameters: Type.Object({
-			status: Type.Optional(Type.String({ description: "Filter by status: active, paused, completed, archived" })),
+			status: Type.Optional(Type.String({ description: "Filter by status: active, pending, done" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const plans = listAllPlans(ctx.cwd, params.status);
@@ -491,19 +489,28 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		name: "plan_focus",
 		label: "plan focus",
 		description:
-			"Set a plan as the active plan. Subsequent plan_update calls will operate on this plan " +
-			"without needing to specify plan_path. The active plan is indicated with ● in plan_list.",
+			"Focus on a plan by moving it to active/. " +
+			"If another plan is already active, it is moved to pending/ first. " +
+			"The active plan is indicated with ● in plan_list.",
 		parameters: Type.Object({
 			plan_path: Type.String({ description: "Path to the plan file to focus on" }),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
 			if (!fs.existsSync(abs)) throw new Error(`Plan not found: ${abs}`);
-			setActivePlan(ctx.cwd, abs);
-			const summary = planSummary(abs);
+			// Already active — nothing to do
+			if (path.dirname(abs) === activeDir(ctx.cwd)) {
+				const summary = planSummary(abs);
+				return { content: [{ type: "text", text: `Already focused: ${summary}\n${abs}` }] };
+			}
+			parkActivePlan(ctx.cwd);
+			const dest = path.join(activeDir(ctx.cwd), path.basename(abs));
+			ensureDir(activeDir(ctx.cwd));
+			fs.renameSync(abs, dest);
+			const summary = planSummary(dest);
 			return {
-				content: [{ type: "text", text: `Focused: ${summary}\n${abs}` }],
-				details: { planPath: abs },
+				content: [{ type: "text", text: `Focused: ${summary}\n${dest}` }],
+				details: { planPath: dest },
 			};
 		},
 	});
@@ -546,81 +553,81 @@ export default function planModeExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("finish-plan", {
-		description: "Mark the active plan as completed",
+		description: "Mark the active plan as completed and move to done/",
 		handler: async (args, ctx) => {
-			const planPath = getActivePlanPath(ctx.cwd);
+			const planPath = getActivePlan(ctx.cwd);
 			if (!planPath) { ctx.ui.notify("No active plan", "warning"); return; }
 			const summary = args?.trim() || undefined;
 			let content = fs.readFileSync(planPath, "utf-8");
-			content = setStatus(content, "completed");
 			content = appendLog(content, summary ? `Plan completed. ${summary}` : "Plan completed.");
-			fs.writeFileSync(planPath, content, "utf-8");
-			ctx.ui.notify(`Completed: ${planSummary(planPath)}`, "info");
+			const dest = path.join(doneDir(ctx.cwd), path.basename(planPath));
+			ensureDir(doneDir(ctx.cwd));
+			fs.writeFileSync(dest, content, "utf-8");
+			fs.unlinkSync(planPath);
+			ctx.ui.notify(`Completed: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("abort-plan", {
-		description: "Abort the active plan and archive it",
+		description: "Abort the active plan and move to done/",
 		handler: async (args, ctx) => {
-			const planPath = getActivePlanPath(ctx.cwd);
+			const planPath = getActivePlan(ctx.cwd);
 			if (!planPath) { ctx.ui.notify("No active plan", "warning"); return; }
 			const reason = args?.trim() || undefined;
 			let content = fs.readFileSync(planPath, "utf-8");
-			content = setStatus(content, "aborted");
 			content = appendLog(content, reason ? `Plan aborted. Reason: ${reason}` : "Plan aborted.");
-			const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-			ensureDir(archiveDir);
-			const dest = path.join(archiveDir, path.basename(planPath));
+			const dest = path.join(doneDir(ctx.cwd), path.basename(planPath));
+			ensureDir(doneDir(ctx.cwd));
 			fs.writeFileSync(dest, content, "utf-8");
 			fs.unlinkSync(planPath);
-			fs.writeFileSync(activePlanFile(ctx.cwd), "", "utf-8");
-			ctx.ui.notify(`Aborted and archived: ${dest}`, "info");
+			ctx.ui.notify(`Aborted: ${dest}`, "info");
 		},
 	});
 
 	pi.registerCommand("resume-plan", {
-		description: "Resume a plan by path (e.g. /resume-plan .pi/plans/archive/20260322-1730-auth.md)",
+		description: "Resume a plan by path (e.g. /resume-plan .pi/plans/done/20260322-1730-auth.md)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /resume-plan <path>", "warning"); return; }
-			let planPath = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
+			const planPath = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
 			if (!fs.existsSync(planPath)) { ctx.ui.notify(`Not found: ${planPath}`, "error"); return; }
 			let content = fs.readFileSync(planPath, "utf-8");
-			content = setStatus(content, "active");
 			content = appendLog(content, "Plan resumed.");
-			const archiveDir = path.join(plansDir(ctx.cwd), "archive");
-			if (planPath.startsWith(archiveDir)) {
-				const dest = path.join(plansDir(ctx.cwd), path.basename(planPath));
-				fs.writeFileSync(dest, content, "utf-8");
-				fs.unlinkSync(planPath);
-				planPath = dest;
-			} else {
-				fs.writeFileSync(planPath, content, "utf-8");
-			}
-			setActivePlan(ctx.cwd, planPath);
-			ctx.ui.notify(`Resumed and focused: ${planSummary(planPath)}`, "info");
+			parkActivePlan(ctx.cwd);
+			const dest = path.join(activeDir(ctx.cwd), path.basename(planPath));
+			ensureDir(activeDir(ctx.cwd));
+			fs.writeFileSync(dest, content, "utf-8");
+			fs.unlinkSync(planPath);
+			ctx.ui.notify(`Resumed and focused: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("focus-plan", {
-		description: "Focus on a plan by path (e.g. /focus-plan .pi/plans/20260322-1730-auth.md)",
+		description: "Focus on a plan by path (e.g. /focus-plan .pi/plans/pending/20260322-1730-auth.md)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /focus-plan <path>", "warning"); return; }
 			const abs = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
 			if (!fs.existsSync(abs)) { ctx.ui.notify(`Not found: ${abs}`, "error"); return; }
-			setActivePlan(ctx.cwd, abs);
-			ctx.ui.notify(`Focused: ${planSummary(abs)}`, "info");
+			if (path.dirname(abs) === activeDir(ctx.cwd)) {
+				ctx.ui.notify(`Already focused: ${planSummary(abs)}`, "info");
+				return;
+			}
+			parkActivePlan(ctx.cwd);
+			const dest = path.join(activeDir(ctx.cwd), path.basename(abs));
+			ensureDir(activeDir(ctx.cwd));
+			fs.renameSync(abs, dest);
+			ctx.ui.notify(`Focused: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("unfocus-plan", {
-		description: "Clear the active plan focus",
+		description: "Move the active plan to pending/",
 		handler: async (_args, ctx) => {
-			const active = getActivePlanPath(ctx.cwd);
+			const active = getActivePlan(ctx.cwd);
 			if (!active) { ctx.ui.notify("No active plan", "info"); return; }
-			fs.writeFileSync(activePlanFile(ctx.cwd), "", "utf-8");
-			ctx.ui.notify("Plan unfocused. System prompt injection stopped.", "info");
+			parkActivePlan(ctx.cwd);
+			ctx.ui.notify("Plan moved to pending/. System prompt injection stopped.", "info");
 		},
 	});
 
@@ -648,7 +655,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		}
 
 		// Root session: only inject if there is an active (focused) plan
-		const activePath = getActivePlanPath(process.cwd());
+		const activePath = getActivePlan(process.cwd());
 		if (!activePath) return; // No focused plan — silent, no injection
 
 		return {
