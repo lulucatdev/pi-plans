@@ -6,7 +6,7 @@
  * checkbox steps and a timestamped log. Directory = status. The agent reads,
  * updates, and tracks the plan as a living document throughout development.
  *
- * Tools:  plan_create, plan_update, plan_list, plan_focus
+ * Tools:  plan_create, plan_update, plan_list, plan_activate
  * Command: /plans
  */
 
@@ -88,7 +88,7 @@ function resolvePlanArg(planPath: string | undefined, cwd: string): string {
 		return path.isAbsolute(planPath) ? planPath : path.resolve(cwd, planPath);
 	}
 	const active = getActivePlan(cwd);
-	if (!active) throw new Error("No active plan. Use plan_focus to set one, or pass plan_path explicitly.");
+	if (!active) throw new Error("No active plan. Use plan_activate to set one, or pass plan_path explicitly.");
 	return active;
 }
 
@@ -244,7 +244,7 @@ function extractPlanPath(prompt: string): string | undefined {
 }
 
 function isReadOnlyTool(name: string): boolean {
-	return ["read", "list", "ls", "grep", "glob", "find", "plan_list", "plan_focus"].includes(name);
+	return ["read", "list", "ls", "grep", "glob", "find", "plan_list", "plan_activate"].includes(name);
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 
 			if (choice === "Save for later") {
 				return {
-					content: [{ type: "text", text: `Plan saved for later: ${planPath}\nUse plan_focus or /focus-plan to activate it when ready.` }],
+					content: [{ type: "text", text: `Plan saved for later: ${planPath}\nUse plan_activate or /activate-plan to activate it when ready.` }],
 					details: { planPath },
 				};
 			}
@@ -333,7 +333,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		description:
 			"Update the active plan. Can complete a step, add a step, or append a log entry. " +
 			"Multiple actions can be combined in one call. " +
-			"Operates on the focused plan by default.",
+			"Operates on the active plan by default.",
 		parameters: Type.Object({
 			complete_step: Type.Optional(Type.Number({
 				description: "1-based step number to mark as complete. Automatically advances the current marker.",
@@ -483,17 +483,17 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// -- plan_focus -----------------------------------------------------------
+	// -- plan_activate --------------------------------------------------------
 
 	pi.registerTool({
-		name: "plan_focus",
-		label: "plan focus",
+		name: "plan_activate",
+		label: "plan activate",
 		description:
-			"Focus on a plan by moving it to active/. " +
+			"Activate a plan by moving it to active/. " +
 			"If another plan is already active, it is moved to pending/ first. " +
 			"The active plan is indicated with ● in plan_list.",
 		parameters: Type.Object({
-			plan_path: Type.String({ description: "Path to the plan file to focus on" }),
+			plan_path: Type.String({ description: "Path to the plan file to activate" }),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
@@ -501,7 +501,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			// Already active — nothing to do
 			if (path.dirname(abs) === activeDir(ctx.cwd)) {
 				const summary = planSummary(abs);
-				return { content: [{ type: "text", text: `Already focused: ${summary}\n${abs}` }] };
+				return { content: [{ type: "text", text: `Already active: ${summary}\n${abs}` }] };
 			}
 			parkActivePlan(ctx.cwd);
 			const dest = path.join(activeDir(ctx.cwd), path.basename(abs));
@@ -509,7 +509,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			fs.renameSync(abs, dest);
 			const summary = planSummary(dest);
 			return {
-				content: [{ type: "text", text: `Focused: ${summary}\n${dest}` }],
+				content: [{ type: "text", text: `Activated: ${summary}\n${dest}` }],
 				details: { planPath: dest },
 			};
 		},
@@ -602,39 +602,39 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("focus-plan", {
-		description: "Focus on a plan by path (e.g. /focus-plan .pi/plans/pending/20260322-1730-auth.md)",
+	pi.registerCommand("activate-plan", {
+		description: "Activate a plan by path (e.g. /activate-plan .pi/plans/pending/20260322-1730-auth.md)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
-			if (!raw) { ctx.ui.notify("Usage: /focus-plan <path>", "warning"); return; }
+			if (!raw) { ctx.ui.notify("Usage: /activate-plan <path>", "warning"); return; }
 			const abs = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
 			if (!fs.existsSync(abs)) { ctx.ui.notify(`Not found: ${abs}`, "error"); return; }
 			if (path.dirname(abs) === activeDir(ctx.cwd)) {
-				ctx.ui.notify(`Already focused: ${planSummary(abs)}`, "info");
+				ctx.ui.notify(`Already active: ${planSummary(abs)}`, "info");
 				return;
 			}
 			parkActivePlan(ctx.cwd);
 			const dest = path.join(activeDir(ctx.cwd), path.basename(abs));
 			ensureDir(activeDir(ctx.cwd));
 			fs.renameSync(abs, dest);
-			ctx.ui.notify(`Focused: ${planSummary(dest)}`, "info");
+			ctx.ui.notify(`Activated: ${planSummary(dest)}`, "info");
 		},
 	});
 
-	pi.registerCommand("unfocus-plan", {
-		description: "Move the active plan to pending/",
+	pi.registerCommand("deactivate-plan", {
+		description: "Deactivate the active plan, moving it to pending/",
 		handler: async (_args, ctx) => {
 			const active = getActivePlan(ctx.cwd);
 			if (!active) { ctx.ui.notify("No active plan", "info"); return; }
 			parkActivePlan(ctx.cwd);
-			ctx.ui.notify("Plan moved to pending/. System prompt injection stopped.", "info");
+			ctx.ui.notify("Plan deactivated and moved to pending/.", "info");
 		},
 	});
 
 	// -- System prompt (conditional) -----------------------------------------
 	//
-	// Only inject plan tracking instructions when a plan is actually focused.
-	// Without a focused plan, nothing is injected — the user must explicitly
+	// Only inject plan tracking instructions when a plan is active.
+	// Without an active plan, nothing is injected — the user must explicitly
 	// /start-plan or /plans to enter plan mode.
 
 	pi.on("before_agent_start", async (event) => {
@@ -654,14 +654,14 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			};
 		}
 
-		// Root session: only inject if there is an active (focused) plan
+		// Root session: only inject if there is an active plan
 		const activePath = getActivePlan(process.cwd());
-		if (!activePath) return; // No focused plan — silent, no injection
+		if (!activePath) return; // No active plan — silent, no injection
 
 		return {
 			systemPrompt: event.systemPrompt +
 				"\n\n## Active Plan\n\n" +
-				`A plan is focused: ${activePath}\n` +
+				`A plan is active: ${activePath}\n` +
 				"Read this plan at the start of your work. As you implement:\n" +
 				"- `plan_update(complete_step: N)` when you finish a step.\n" +
 				"- `plan_update(log: \"...\")` to record decisions, progress, or blockers.\n" +

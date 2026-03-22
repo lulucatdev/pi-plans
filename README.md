@@ -2,7 +2,7 @@
 
 A text-based project manager for [pi](https://github.com/mariozechner/pi). Plans are living markdown documents with checkbox steps, timestamped logs, and full lifecycle management.
 
-Plans are opt-in. Nothing is injected into the system prompt until you explicitly start and focus a plan. Once focused, the agent automatically tracks progress as it works.
+Plans are opt-in. Nothing is injected into the system prompt until you explicitly start and activate a plan. Once active, the agent automatically tracks progress as it works.
 
 ## Installation
 
@@ -16,8 +16,8 @@ pi install git:github.com/lulucatdev/pi-plans
 |---------|-------------|
 | `/start-plan [topic]` | Begin a planning session (research, discuss, create) |
 | `/plans` | List all plans with status and progress |
-| `/focus-plan <path>` | Lock onto a plan (enables automatic tracking) |
-| `/unfocus-plan` | Clear focus (stops system prompt injection) |
+| `/activate-plan <path>` | Activate a plan (enables automatic tracking) |
+| `/deactivate-plan` | Deactivate the active plan (moves to `pending/`) |
 | `/finish-plan [summary]` | Mark active plan as completed, move to `done/` |
 | `/abort-plan [reason]` | Abort active plan, move to `done/` |
 | `/resume-plan <path>` | Restore a plan from `pending/` or `done/` |
@@ -32,7 +32,7 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_abort` | Abort plan with reason, move to `done/` |
 | `plan_resume` | Move a `pending/` or `done/` plan to `active/` |
 | `plan_list` | List plans with status filter (`active`, `pending`, `done`) |
-| `plan_focus` | Move a plan to `active/` (parks current active to `pending/`) |
+| `plan_activate` | Move a plan to `active/` (parks current active to `pending/`) |
 
 ## How it works
 
