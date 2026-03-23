@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { ensureDir, pendingDir, activeDir, doneDir, abortedDir, plansDir, researchDir, planResearchDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
+import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
 import { renderPlan, renderResearchDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
-import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans } from "./state.js";
+import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
 
 export function registerTools(pi: ExtensionAPI, session: SessionState): void {
@@ -383,6 +383,16 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			fs.writeFileSync(planFile(planPath), content, "utf-8");
 
+			// Auto-log step changes
+			if (params.complete_step !== undefined) {
+				const steps = parseSteps(content);
+				const step = steps.find((s) => s.index === params.complete_step! - 1);
+				appendLog(logFile(planPath), `Completed step ${params.complete_step}${step ? `: ${step.text}` : ""}`);
+			}
+			if (params.add_step) {
+				appendLog(logFile(planPath), `Added step: ${params.add_step}`);
+			}
+
 			if (params.log) {
 				appendLog(logFile(planPath), params.log);
 				actions.push("added log entry");
@@ -516,26 +526,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			const content = fs.readFileSync(planFile(planPath), "utf-8");
-
-			// Check completion prerequisites
-			const steps = parseSteps(content);
-			const incomplete = steps.filter((s) => !s.done);
-			if (incomplete.length > 0) {
-				throw new Error(`Cannot finish: ${incomplete.length} step(s) still incomplete. Complete all steps or use plan_abort.`);
-			}
-			const hasVerification = content.includes("<!-- VERIFIED -->");
-			if (!hasVerification) {
-				throw new Error("Cannot finish: no verification record found. Run plan_verify first, or use plan_abort to skip.");
-			}
-
-			const logMsg = params.summary ? `Plan completed. ${params.summary}` : "Plan completed.";
-			appendLog(logFile(planPath), logMsg);
-
-			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(doneDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
+			const dest = finishPlan(planPath, ctx.cwd, session, params.summary);
 			return {
 				content: [{ type: "text", text: `Plan completed: ${dest}` }],
 				details: { planPath: dest },
@@ -556,14 +547,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-
-			const logMsg = params.reason ? `Plan aborted. Reason: ${params.reason}` : "Plan aborted.";
-			appendLog(logFile(planPath), logMsg);
-
-			const dest = safeDestPath(path.join(abortedDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(abortedDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
+			const dest = abortPlan(planPath, ctx.cwd, session, params.reason);
 			return {
 				content: [{ type: "text", text: `Plan aborted: ${dest}` }],
 				details: { planPath: dest },
@@ -585,26 +569,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
-			validatePlanPath(planPath, ctx.cwd);
-			if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
-			const parentDir = path.basename(path.dirname(planPath));
-			if (parentDir === "active") throw new Error(`Plan is already active: ${planPath}`);
-			if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") {
-				throw new Error(`Can only resume plans from pending/, done/, or aborted/, not ${parentDir}/`);
-			}
-
-			// Clear stale verification from plan.md
-			let content = fs.readFileSync(planFile(planPath), "utf-8");
-			content = content.replaceAll("<!-- VERIFIED -->", "");
-			fs.writeFileSync(planFile(planPath), content, "utf-8");
-
-			const logMsg = params.reason ? `Plan resumed. ${params.reason}` : "Plan resumed.";
-			appendLog(logFile(planPath), logMsg);
-
-			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(activeDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-
+			const dest = resumePlan(planPath, ctx.cwd, params.reason);
 			const summary = planSummary(dest);
 			return {
 				content: [{ type: "text", text: `Resumed and activated: ${summary}\n${dest}` }],
@@ -646,20 +611,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
-			validatePlanPath(abs, ctx.cwd);
-			if (!fs.existsSync(abs)) throw new Error(`Plan not found: ${abs}`);
-			const parentDir = path.basename(path.dirname(abs));
-			if (parentDir === "active") {
+			// Special case: already active — return info instead of error
+			if (path.basename(path.dirname(abs)) === "active" && fs.existsSync(abs)) {
 				const summary = planSummary(abs);
 				return { content: [{ type: "text", text: `Already active: ${summary}\n${abs}` }], details: {} };
 			}
-			if (parentDir !== "pending") throw new Error(`Can only activate plans from pending/, not ${parentDir}/. Use plan_resume for done/ or aborted/ plans.`);
-
-			appendLog(logFile(abs), "Plan activated.");
-
-			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(abs)));
-			ensureDir(activeDir(ctx.cwd));
-			fs.renameSync(abs, dest);
+			const dest = activatePlan(abs, ctx.cwd);
 			const summary = planSummary(dest);
 			const activeCount = getActivePlans(ctx.cwd).length;
 			const countNote = activeCount > 1 ? ` (${activeCount} plans now active)` : "";

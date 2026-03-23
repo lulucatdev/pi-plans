@@ -14,6 +14,8 @@ pi install git:github.com/lulucatdev/pi-plans
 
 | Command | Description |
 |---------|-------------|
+| `/just-brainstorm [topic]` | Pure brainstorming: explore ideas through Q&A, no research or plan creation |
+| `/start-brainstorm [topic]` | Open-ended brainstorming session (research, explore, optionally create a plan) |
 | `/start-plan [topic]` | Begin a planning session (research, brainstorm, create) |
 | `/plans` | List all plans with status and progress |
 | `/activate-plan <path>` | Activate a pending plan |
@@ -31,7 +33,7 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_brainstorm` | Ask the user a question via UI dialog (select or free-text). Used for all interaction before `plan_create`. |
 | `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Prompts: start now, save for later, or feedback. |
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
-| `plan_update` | Mark steps complete, add steps. Logs to `log.md`. |
+| `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |
 | `plan_log` | Add a log entry to the plan's `log.md`. |
 | `plan_verify` | Acceptance phase: present automated test results + manual checklist to user for approval. |
 | `plan_finish` | Mark plan completed, move to `done/`. Requires all steps done + verification passed. |

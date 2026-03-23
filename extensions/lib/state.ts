@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, abortedDir, plansDir, ensureDir, safeDestPath, planFile } from "./utils.js";
-import { parseSteps } from "./format.js";
+import { activeDir, pendingDir, doneDir, abortedDir, plansDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath } from "./utils.js";
+import { parseSteps, appendLog } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
 /** Shared mutable session state. */
@@ -96,6 +96,70 @@ export function planSummary(planPath: string): string {
 	const current = steps.find((s) => s.isCurrent);
 	const currentText = current ? ` → ${current.text}` : "";
 	return `[${status}] ${done}/${total} ${title}${currentText}`;
+}
+
+// -- Shared lifecycle transitions -------------------------------------------
+
+/** Finish a plan: validate prerequisites, log, move to done/. Returns dest path. */
+export function finishPlan(planPath: string, cwd: string, session: SessionState, summary?: string): string {
+	const content = fs.readFileSync(planFile(planPath), "utf-8");
+	const steps = parseSteps(content);
+	const incomplete = steps.filter((s) => !s.done);
+	if (incomplete.length > 0) {
+		throw new Error(`Cannot finish: ${incomplete.length} step(s) still incomplete. Complete all steps or use plan_abort.`);
+	}
+	if (!content.includes("<!-- VERIFIED -->")) {
+		throw new Error("Cannot finish: no verification record found. Run plan_verify first, or use plan_abort to skip.");
+	}
+	appendLog(logFile(planPath), summary ? `Plan completed. ${summary}` : "Plan completed.");
+	const dest = safeDestPath(path.join(doneDir(cwd), path.basename(planPath)));
+	ensureDir(doneDir(cwd));
+	fs.renameSync(planPath, dest);
+	if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
+	return dest;
+}
+
+/** Abort a plan: log reason, move to aborted/. Returns dest path. */
+export function abortPlan(planPath: string, cwd: string, session: SessionState, reason?: string): string {
+	appendLog(logFile(planPath), reason ? `Plan aborted. Reason: ${reason}` : "Plan aborted.");
+	const dest = safeDestPath(path.join(abortedDir(cwd), path.basename(planPath)));
+	ensureDir(abortedDir(cwd));
+	fs.renameSync(planPath, dest);
+	if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
+	return dest;
+}
+
+/** Resume a plan from pending/done/aborted to active/. Clears stale verification. Returns dest path. */
+export function resumePlan(planPath: string, cwd: string, reason?: string): string {
+	validatePlanPath(planPath, cwd);
+	if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
+	const parentDir = path.basename(path.dirname(planPath));
+	if (parentDir === "active") throw new Error(`Plan is already active: ${planPath}`);
+	if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") {
+		throw new Error(`Can only resume plans from pending/, done/, or aborted/, not ${parentDir}/`);
+	}
+	let content = fs.readFileSync(planFile(planPath), "utf-8");
+	content = content.replaceAll("<!-- VERIFIED -->", "");
+	fs.writeFileSync(planFile(planPath), content, "utf-8");
+	appendLog(logFile(planPath), reason ? `Plan resumed. ${reason}` : "Plan resumed.");
+	const dest = safeDestPath(path.join(activeDir(cwd), path.basename(planPath)));
+	ensureDir(activeDir(cwd));
+	fs.renameSync(planPath, dest);
+	return dest;
+}
+
+/** Activate a plan from pending/ to active/. Returns dest path. */
+export function activatePlan(planPath: string, cwd: string): string {
+	validatePlanPath(planPath, cwd);
+	if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
+	const parentDir = path.basename(path.dirname(planPath));
+	if (parentDir === "active") throw new Error(`Already active: ${planPath}`);
+	if (parentDir !== "pending") throw new Error(`Can only activate plans from pending/, not ${parentDir}/. Use plan_resume for done/ or aborted/ plans.`);
+	appendLog(logFile(planPath), "Plan activated.");
+	const dest = safeDestPath(path.join(activeDir(cwd), path.basename(planPath)));
+	ensureDir(activeDir(cwd));
+	fs.renameSync(planPath, dest);
+	return dest;
 }
 
 export function listAllPlans(cwd: string, statusFilter?: string): PlanEntry[] {

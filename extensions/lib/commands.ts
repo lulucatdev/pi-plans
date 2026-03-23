@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { ensureDir, activeDir, doneDir, abortedDir, plansDir, planFile, logFile, safeDestPath, validatePlanPath } from "./utils.js";
-import { parseSteps, appendLog } from "./format.js";
-import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans } from "./state.js";
+import { plansDir, validatePlanPath } from "./utils.js";
+import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
 
 export function registerCommands(pi: ExtensionAPI, session: SessionState): void {
@@ -16,6 +15,72 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				return;
 			}
 			ctx.ui.notify(plans.map((p) => `${p.summary}\n  ${p.path}`).join("\n"), "info");
+		},
+	});
+
+	pi.registerCommand("just-brainstorm", {
+		description: "Pure brainstorming session: ask questions, explore ideas, no research or plan creation",
+		handler: async (args, ctx) => {
+			const topic = args?.trim() || "";
+			const prompt = [
+				"We are having a pure brainstorming session. No research phase, no plan creation — just a focused conversation to explore ideas.",
+				"",
+				"Use the `plan_brainstorm` tool for EVERY question. Do NOT use regular text messages to ask questions. One question at a time.",
+				"",
+				"1. **Understand the idea** — ask about goals, context, constraints",
+				"2. **Explore angles** — trade-offs, alternatives, edge cases, implications",
+				"3. **Propose directions** — present options with trade-offs when patterns emerge",
+				"4. **Keep going** — continue as long as the user wants to explore",
+				"",
+				"Do NOT research the codebase or create plans unless the user explicitly asks.",
+				topic ? `\nTopic: ${topic}` : "",
+			].filter(Boolean).join("\n");
+
+			pi.sendMessage(
+				{ customType: "just-brainstorm", content: prompt, display: true },
+				{ triggerTurn: true },
+			);
+		},
+	});
+
+	pi.registerCommand("start-brainstorm", {
+		description: "Start an open-ended brainstorming session: research and explore ideas freely",
+		handler: async (args, ctx) => {
+			const topic = args?.trim() || "";
+			const prompt = [
+				"We are starting an open-ended brainstorming session. This is exploratory — we may or may not end up creating a formal plan.",
+				"",
+				"## Phase 1: Research",
+				"",
+				"Explore the codebase and external resources to build context. Do NOT ask the user anything yet — gather context first.",
+				"",
+				"**Research tips:**",
+				"- Use **tasks** to run parallel research across multiple areas of the codebase simultaneously, or do focused sequential research — whichever fits.",
+				"- Use **exa**, **web_search**, or other web tools for external lookups (docs, APIs, libraries, best practices).",
+				"- Read key files, understand the architecture, identify patterns and conventions.",
+				"- Call `plan_research(topic)` to create research documents that persist your findings.",
+				"",
+				"## Phase 2: Brainstorm",
+				"",
+				"Use the `plan_brainstorm` tool for EVERY question to the user. Do NOT use regular text messages to ask questions. One question at a time.",
+				"",
+				"1. **Explore the idea** — ask about goals, motivations, constraints. Prefer multiple-choice options when possible.",
+				"2. **Investigate angles** — dig into trade-offs, alternatives, implications.",
+				"3. **Synthesize** — summarize what we've learned and propose possible directions.",
+				"",
+				"## What Happens Next",
+				"",
+				"After brainstorming, ask the user what they'd like to do:",
+				"- **Create a plan** — if we've converged on something actionable, use `plan_create` to formalize it",
+				"- **Keep exploring** — continue researching and brainstorming",
+				"- **Done for now** — wrap up, research docs are already saved",
+				topic ? `\nTopic: ${topic}` : "",
+			].filter(Boolean).join("\n");
+
+			pi.sendMessage(
+				{ customType: "start-brainstorm", content: prompt, display: true },
+				{ triggerTurn: true },
+			);
 		},
 	});
 
@@ -80,18 +145,10 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 		handler: async (args, ctx) => {
 			let planPath: string;
 			try { planPath = resolvePlanArg(undefined, ctx.cwd, session.focusedPlan); } catch (e: any) { ctx.ui.notify(e.message, "warning"); return; }
-			const content = fs.readFileSync(planFile(planPath), "utf-8");
-			const steps = parseSteps(content);
-			const incomplete = steps.filter((s) => !s.done);
-			if (incomplete.length > 0) { ctx.ui.notify(`Cannot finish: ${incomplete.length} step(s) still incomplete.`, "error"); return; }
-			if (!content.includes("<!-- VERIFIED -->")) { ctx.ui.notify("Cannot finish: run plan_verify first, or use /abort-plan.", "error"); return; }
-			const summary = args?.trim() || undefined;
-			appendLog(logFile(planPath), summary ? `Plan completed. ${summary}` : "Plan completed.");
-			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(doneDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
-			ctx.ui.notify(`Completed: ${planSummary(dest)}`, "info");
+			try {
+				const dest = finishPlan(planPath, ctx.cwd, session, args?.trim() || undefined);
+				ctx.ui.notify(`Completed: ${planSummary(dest)}`, "info");
+			} catch (e: any) { ctx.ui.notify(e.message, "error"); }
 		},
 	});
 
@@ -100,12 +157,7 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 		handler: async (args, ctx) => {
 			let planPath: string;
 			try { planPath = resolvePlanArg(undefined, ctx.cwd, session.focusedPlan); } catch (e: any) { ctx.ui.notify(e.message, "warning"); return; }
-			const reason = args?.trim() || undefined;
-			appendLog(logFile(planPath), reason ? `Plan aborted. Reason: ${reason}` : "Plan aborted.");
-			const dest = safeDestPath(path.join(abortedDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(abortedDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
+			const dest = abortPlan(planPath, ctx.cwd, session, args?.trim() || undefined);
 			ctx.ui.notify(`Aborted: ${dest}`, "info");
 		},
 	});
@@ -116,19 +168,10 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /resume-plan <path>", "warning"); return; }
 			const planPath = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
-			try { validatePlanPath(planPath, ctx.cwd); } catch (e: any) { ctx.ui.notify(e.message, "error"); return; }
-			if (!fs.existsSync(planPath)) { ctx.ui.notify(`Not found: ${planPath}`, "error"); return; }
-			const parentDir = path.basename(path.dirname(planPath));
-			if (parentDir === "active") { ctx.ui.notify(`Plan is already active: ${planPath}`, "warning"); return; }
-			if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") { ctx.ui.notify(`Can only resume from pending/, done/, or aborted/`, "error"); return; }
-			let content = fs.readFileSync(planFile(planPath), "utf-8");
-			content = content.replaceAll("<!-- VERIFIED -->", "");
-			fs.writeFileSync(planFile(planPath), content, "utf-8");
-			appendLog(logFile(planPath), "Plan resumed.");
-			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(activeDir(ctx.cwd));
-			fs.renameSync(planPath, dest);
-			ctx.ui.notify(`Resumed and activated: ${planSummary(dest)}`, "info");
+			try {
+				const dest = resumePlan(planPath, ctx.cwd);
+				ctx.ui.notify(`Resumed and activated: ${planSummary(dest)}`, "info");
+			} catch (e: any) { ctx.ui.notify(e.message, "error"); }
 		},
 	});
 
@@ -138,16 +181,10 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /activate-plan <path>", "warning"); return; }
 			const abs = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
-			try { validatePlanPath(abs, ctx.cwd); } catch (e: any) { ctx.ui.notify(e.message, "error"); return; }
-			if (!fs.existsSync(abs)) { ctx.ui.notify(`Not found: ${abs}`, "error"); return; }
-			const parentDir = path.basename(path.dirname(abs));
-			if (parentDir === "active") { ctx.ui.notify(`Already active: ${planSummary(abs)}`, "info"); return; }
-			if (parentDir !== "pending") { ctx.ui.notify(`Can only activate from pending/. Use /resume-plan for done/ or aborted/ plans.`, "error"); return; }
-			appendLog(logFile(abs), "Plan activated.");
-			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(abs)));
-			ensureDir(activeDir(ctx.cwd));
-			fs.renameSync(abs, dest);
-			ctx.ui.notify(`Activated: ${planSummary(dest)}`, "info");
+			try {
+				const dest = activatePlan(abs, ctx.cwd);
+				ctx.ui.notify(`Activated: ${planSummary(dest)}`, "info");
+			} catch (e: any) { ctx.ui.notify(e.message, "error"); }
 		},
 	});
 
