@@ -35,11 +35,11 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
 | `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |
 | `plan_log` | Add a log entry to the plan's `log.md`. |
-| `plan_verify` | Acceptance phase: present automated test results + manual checklist to user for approval. |
+| `plan_verify` | Acceptance phase: present your automated test results + manual checklist to user for approval. |
 | `plan_finish` | Mark plan completed, move to `done/`. Requires all steps done + verification passed. |
 | `plan_abort` | Abort plan with reason, move to `aborted/`. |
 | `plan_resume` | Resume a plan from `pending/`, `done/`, or `aborted/` to `active/`. |
-| `plan_list` | List plans with status filter (`active`, `pending`, `done`). |
+| `plan_list` | List plans with status filter (`active`, `pending`, `done`, `aborted`). |
 | `plan_activate` | Move a pending plan to `active/`. Multiple plans can be active simultaneously. |
 
 ## How it works
@@ -48,7 +48,7 @@ pi install git:github.com/lulucatdev/pi-plans
 /start-plan refactor auth system          ← user initiates
 
   Phase 1: Research
-  agent explores codebase + web (tasks, exa, web_search)
+  agent explores codebase + web resources
   → plan_research(topic)                  ← creates research doc, agent writes findings
 
   Phase 2: Brainstorm

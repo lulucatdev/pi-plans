@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
 import { renderPlan, renderResearchDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
-import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
+import { getActivePlans, getActivePlan, resolvePlanArg, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
 
 export function registerTools(pi: ExtensionAPI, session: SessionState): void {
@@ -43,10 +43,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_research",
 		label: "plan research",
 		description:
-			"Initiate a research phase. When linked to a plan, creates a research document inside the plan's " +
-			"research/ subfolder. For standalone research (no plan), uses .pi/plans/research/_standalone/. " +
-			"Returns the file path. Write your research findings into this file using the write tool. " +
-			"Available at every stage: before brainstorming, during planning, or mid-execution.",
+			"Start researching a topic. Creates a persistent research document — write your findings there as you go. " +
+			"Use this proactively whenever you need to understand something better: before brainstorming, during planning, or mid-execution. " +
+			"Don't hesitate to call this multiple times for different topics. " +
+			"When linked to a plan, files go in the plan's research/ subfolder; otherwise .pi/plans/research/_standalone/.",
 		parameters: Type.Object({
 			topic: Type.String({ description: "What you need to research, e.g. 'OAuth 2.0 PKCE flow best practices'" }),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path to log to (default: active plan, if any)" })),
@@ -98,24 +98,16 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"",
 				`**Research document created:** ${relPath}`,
 				"",
-				"Write your findings into this file as you research. Use the write tool to update it with:",
-				"- Key facts and data points discovered",
-				"- Code patterns and examples found",
-				"- Links to relevant documentation",
-				"- Conclusions and recommendations",
+				"Investigate this topic thoroughly. Be resourceful — use whatever approach gets you the best understanding fastest. Write your findings into this file as you go.",
 				"",
-				"### Research Approaches",
-				"",
-				"**Parallel research** — use tasks to investigate multiple areas simultaneously",
-				"**Sequential research** — read files, grep for patterns, trace code paths",
-				"**Web research** — use exa, web_search, or WebFetch for external knowledge",
+				"**Good research is proactive:** follow threads that look promising, check related areas you weren't asked about, and surface insights the user might not have considered. If your investigation raises new questions, call `plan_research` again to open a new doc for each distinct topic.",
 				"",
 				"### If Debugging a Problem",
 				"",
-				"1. **Root cause investigation** — read the error, reproduce consistently, check recent changes",
-				"2. **Pattern analysis** — find working examples, compare, identify the difference",
-				"3. **Hypothesis & test** — one hypothesis, one variable, verify before continuing",
-				"4. **Implement fix** — single targeted change, then verify",
+				"1. **Root cause** — read the error, reproduce, check recent changes",
+				"2. **Pattern analysis** — find working examples, compare, spot the difference",
+				"3. **Hypothesis & test** — one variable at a time, verify before continuing",
+				"4. **Fix** — single targeted change, then verify",
 			].join("\n");
 
 			return {
@@ -223,6 +215,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			]);
 
 			if (choice === "Start now") {
+				appendLog(logFile(planDir), "Plan activated.");
 				const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planDir)));
 				ensureDir(activeDir(ctx.cwd));
 				fs.renameSync(planDir, dest);
@@ -301,11 +294,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"- Never say 'should work' or 'probably passes' — run it and see",
 				"",
 				"### Research During Execution",
-				"When you need to investigate something:",
-				"- Call `plan_research(topic)` to log it and get methodology guidance",
-				"- Use **tasks** to run parallel research across multiple areas",
-				"- Use **exa**, **web_search**, or other web tools for external lookups",
-				"- Or do focused sequential research — whatever fits the question",
+				"When you hit something unfamiliar or uncertain, don't guess — research it.",
+				"Call `plan_research(topic)` to create a research doc and investigate properly. Good engineers research proactively, not just when stuck.",
 				"",
 				"### When Something Breaks — Systematic Debugging",
 				"If you hit an error or unexpected behavior, do NOT guess-and-fix. Follow this sequence:",
@@ -431,9 +421,9 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_verify",
 		label: "plan verify",
 		description:
-			"Run the verification/acceptance phase before finishing a plan. " +
-			"Call this BEFORE plan_finish. Two stages: " +
-			"1) Run all automated checks from the plan's Verification section (or provide your own) and report results. " +
+			"Present verification results to the user for acceptance before finishing a plan. " +
+			"Call this BEFORE plan_finish. You must run the automated checks yourself first, then pass the results here. Two stages: " +
+			"1) Show the automated check results you provide to the user. " +
 			"2) Present the manual acceptance checklist from the plan to the user via UI dialog. " +
 			"Only call plan_finish after the user approves.",
 		parameters: Type.Object({
@@ -611,6 +601,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
+			validatePlanPath(abs, ctx.cwd);
 			// Special case: already active — return info instead of error
 			if (path.basename(path.dirname(abs)) === "active" && fs.existsSync(abs)) {
 				const summary = planSummary(abs);

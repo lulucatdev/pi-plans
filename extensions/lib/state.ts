@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, abortedDir, plansDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath } from "./utils.js";
+import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath } from "./utils.js";
 import { parseSteps, appendLog } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
@@ -39,6 +39,7 @@ export function getActivePlan(cwd: string): string | undefined {
 export function parkActivePlan(cwd: string, planPath: string) {
 	const parentDir = path.basename(path.dirname(planPath));
 	if (parentDir !== "active") throw new Error(`Can only deactivate plans in active/, not ${parentDir}/: ${planPath}`);
+	appendLog(logFile(planPath), "Plan deactivated.");
 	const dest = safeDestPath(path.join(pendingDir(cwd), path.basename(planPath)));
 	ensureDir(pendingDir(cwd));
 	fs.renameSync(planPath, dest);
