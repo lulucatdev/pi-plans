@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { ensureDir, activeDir, doneDir, plansDir, safeDestPath, validatePlanPath } from "./utils.js";
+import { ensureDir, activeDir, doneDir, abortedDir, plansDir, planFile, logFile, safeDestPath, validatePlanPath } from "./utils.js";
 import { parseSteps, appendLog } from "./format.js";
 import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans } from "./state.js";
 import type { SessionState } from "./types.js";
@@ -80,41 +80,38 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 		handler: async (args, ctx) => {
 			let planPath: string;
 			try { planPath = resolvePlanArg(undefined, ctx.cwd, session.focusedPlan); } catch (e: any) { ctx.ui.notify(e.message, "warning"); return; }
-			const content = fs.readFileSync(planPath, "utf-8");
+			const content = fs.readFileSync(planFile(planPath), "utf-8");
 			const steps = parseSteps(content);
 			const incomplete = steps.filter((s) => !s.done);
 			if (incomplete.length > 0) { ctx.ui.notify(`Cannot finish: ${incomplete.length} step(s) still incomplete.`, "error"); return; }
 			if (!content.includes("<!-- VERIFIED -->")) { ctx.ui.notify("Cannot finish: run plan_verify first, or use /abort-plan.", "error"); return; }
 			const summary = args?.trim() || undefined;
-			let updated = appendLog(content, summary ? `Plan completed. ${summary}` : "Plan completed.");
+			appendLog(logFile(planPath), summary ? `Plan completed. ${summary}` : "Plan completed.");
 			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
 			ensureDir(doneDir(ctx.cwd));
-			fs.writeFileSync(dest, updated, "utf-8");
-			fs.unlinkSync(planPath);
+			fs.renameSync(planPath, dest);
 			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
 			ctx.ui.notify(`Completed: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("abort-plan", {
-		description: "Abort the active plan and move to done/",
+		description: "Abort the active plan and move to aborted/",
 		handler: async (args, ctx) => {
 			let planPath: string;
 			try { planPath = resolvePlanArg(undefined, ctx.cwd, session.focusedPlan); } catch (e: any) { ctx.ui.notify(e.message, "warning"); return; }
 			const reason = args?.trim() || undefined;
-			let content = fs.readFileSync(planPath, "utf-8");
-			content = appendLog(content, reason ? `Plan aborted. Reason: ${reason}` : "Plan aborted.");
-			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(doneDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(planPath);
+			appendLog(logFile(planPath), reason ? `Plan aborted. Reason: ${reason}` : "Plan aborted.");
+			const dest = safeDestPath(path.join(abortedDir(ctx.cwd), path.basename(planPath)));
+			ensureDir(abortedDir(ctx.cwd));
+			fs.renameSync(planPath, dest);
 			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
 			ctx.ui.notify(`Aborted: ${dest}`, "info");
 		},
 	});
 
 	pi.registerCommand("resume-plan", {
-		description: "Resume a plan by path (e.g. /resume-plan .pi/plans/done/20260322-1730-auth.md)",
+		description: "Resume a plan by path (e.g. /resume-plan .pi/plans/done/20260322-auth)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /resume-plan <path>", "warning"); return; }
@@ -123,20 +120,20 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			if (!fs.existsSync(planPath)) { ctx.ui.notify(`Not found: ${planPath}`, "error"); return; }
 			const parentDir = path.basename(path.dirname(planPath));
 			if (parentDir === "active") { ctx.ui.notify(`Plan is already active: ${planPath}`, "warning"); return; }
-			if (parentDir !== "pending" && parentDir !== "done") { ctx.ui.notify(`Can only resume from pending/ or done/`, "error"); return; }
-			let content = fs.readFileSync(planPath, "utf-8");
-			content = content.replaceAll("<!-- VERIFIED -->", ""); // Clear stale verification
-			content = appendLog(content, "Plan resumed.");
+			if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") { ctx.ui.notify(`Can only resume from pending/, done/, or aborted/`, "error"); return; }
+			let content = fs.readFileSync(planFile(planPath), "utf-8");
+			content = content.replaceAll("<!-- VERIFIED -->", "");
+			fs.writeFileSync(planFile(planPath), content, "utf-8");
+			appendLog(logFile(planPath), "Plan resumed.");
 			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planPath)));
 			ensureDir(activeDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(planPath);
+			fs.renameSync(planPath, dest);
 			ctx.ui.notify(`Resumed and activated: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("activate-plan", {
-		description: "Activate a plan by path (e.g. /activate-plan .pi/plans/pending/20260322-1730-auth.md)",
+		description: "Activate a plan by path (e.g. /activate-plan .pi/plans/pending/20260322-auth)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
 			if (!raw) { ctx.ui.notify("Usage: /activate-plan <path>", "warning"); return; }
@@ -145,19 +142,17 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			if (!fs.existsSync(abs)) { ctx.ui.notify(`Not found: ${abs}`, "error"); return; }
 			const parentDir = path.basename(path.dirname(abs));
 			if (parentDir === "active") { ctx.ui.notify(`Already active: ${planSummary(abs)}`, "info"); return; }
-			if (parentDir !== "pending") { ctx.ui.notify(`Can only activate from pending/. Use /resume-plan for done/ plans.`, "error"); return; }
-			let content = fs.readFileSync(abs, "utf-8");
-			content = appendLog(content, "Plan activated.");
+			if (parentDir !== "pending") { ctx.ui.notify(`Can only activate from pending/. Use /resume-plan for done/ or aborted/ plans.`, "error"); return; }
+			appendLog(logFile(abs), "Plan activated.");
 			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(abs)));
 			ensureDir(activeDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(abs);
+			fs.renameSync(abs, dest);
 			ctx.ui.notify(`Activated: ${planSummary(dest)}`, "info");
 		},
 	});
 
 	pi.registerCommand("deactivate-plan", {
-		description: "Deactivate an active plan (e.g. /deactivate-plan .pi/plans/active/20260322-1730-auth.md)",
+		description: "Deactivate an active plan (e.g. /deactivate-plan .pi/plans/active/20260322-auth)",
 		handler: async (args, ctx) => {
 			const raw = args?.trim();
 			if (raw) {

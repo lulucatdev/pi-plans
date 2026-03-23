@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { ensureDir, pendingDir, activeDir, doneDir, plansDir, researchDir, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
-import { renderPlan, renderResearchDoc, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
+import { ensureDir, pendingDir, activeDir, doneDir, abortedDir, plansDir, researchDir, planResearchDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
+import { renderPlan, renderResearchDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
 import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans } from "./state.js";
 import type { SessionState } from "./types.js";
 
@@ -18,7 +18,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"(plan_update, plan_execute, plan_verify, etc.) default to this plan " +
 			"without needing plan_path on every call. Useful when multiple plans are active.",
 		parameters: Type.Object({
-			plan_path: Type.String({ description: "Path to the plan file to focus on" }),
+			plan_path: Type.String({ description: "Path to the plan folder to focus on" }),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
@@ -43,17 +43,17 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_research",
 		label: "plan research",
 		description:
-			"Initiate a research phase. Creates a research document at .pi/plans/research/<plan>/<topic>.md " +
-			"and returns the file path. Write your research findings into this file using the write tool. " +
+			"Initiate a research phase. When linked to a plan, creates a research document inside the plan's " +
+			"research/ subfolder. For standalone research (no plan), uses .pi/plans/research/_standalone/. " +
+			"Returns the file path. Write your research findings into this file using the write tool. " +
 			"Available at every stage: before brainstorming, during planning, or mid-execution.",
 		parameters: Type.Object({
 			topic: Type.String({ description: "What you need to research, e.g. 'OAuth 2.0 PKCE flow best practices'" }),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path to log to (default: active plan, if any)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path to log to (default: active plan, if any)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			// Resolve plan for logging and research folder naming
+			// Resolve plan for logging and research folder placement
 			let planPath: string | undefined;
-			let planSlug: string | undefined;
 			let planName: string | undefined;
 			if (params.plan_path) {
 				const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
@@ -70,24 +70,26 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			}
 
 			if (planPath) {
-				planSlug = extractSlugFromPlanPath(planPath);
-				const content = fs.readFileSync(planPath, "utf-8");
+				const content = fs.readFileSync(planFile(planPath), "utf-8");
 				const titleMatch = content.match(/^# (.+)/m);
-				planName = titleMatch?.[1] ?? planSlug;
+				planName = titleMatch?.[1] ?? extractSlugFromPlanPath(planPath);
 			}
 
-			// Create research document
-			const rDir = researchDir(ctx.cwd, planSlug);
+			// Create research document — inside plan folder or standalone
+			let rDir: string;
+			if (planPath) {
+				rDir = planResearchDir(planPath);
+			} else {
+				rDir = researchDir(ctx.cwd);
+			}
 			ensureDir(rDir);
-			const researchFile = safeDestPath(path.join(rDir, `${slugify(params.topic)}.md`));
+			const researchFile = safeDestPath(path.join(rDir, `${ts()}-${slugify(params.topic)}.md`));
 			fs.writeFileSync(researchFile, renderResearchDoc(params.topic, planName), "utf-8");
 
-			// Log to plan
-			if (planPath && fs.existsSync(planPath)) {
-				const relResearch = path.relative(path.dirname(planPath), researchFile);
-				let content = fs.readFileSync(planPath, "utf-8");
-				content = appendLog(content, `Researching: ${params.topic} → ${relResearch}`);
-				fs.writeFileSync(planPath, content, "utf-8");
+			// Log to plan's log.md
+			if (planPath) {
+				const relResearch = path.relative(planPath, researchFile);
+				appendLog(logFile(planPath), `Researching: ${params.topic} → ${relResearch}`);
 			}
 
 			const relPath = path.relative(ctx.cwd, researchFile);
@@ -193,25 +195,29 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			}, { description: "Verification criteria defined upfront. Automated commands + manual acceptance checklist. Used by plan_verify at the end." })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			// Write to pending/ first; user decides what to do next
+			// Create plan folder in pending/
 			const dir = pendingDir(ctx.cwd);
 			ensureDir(dir);
-			const filename = `${ts()}-${slugify(params.name)}.md`;
-			const planPath = safeDestPath(path.join(dir, filename));
-			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-			fs.writeFileSync(planPath, renderPlan(title, params.goal, params.steps, params.architecture, params.verification), "utf-8");
+			const folderName = `${ts()}-${slugify(params.name)}`;
+			const planDir = safeDestPath(path.join(dir, folderName));
+			ensureDir(planDir);
 
-			const relPath = path.relative(ctx.cwd, planPath);
-		const choice = await ctx.ui.select(`Plan created: ${relPath}\nWhat next?`, [
+			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+			fs.writeFileSync(planFile(planDir), renderPlan(title, params.goal, params.steps, params.architecture, params.verification), "utf-8");
+			fs.writeFileSync(logFile(planDir), renderLogHeader(), "utf-8");
+			appendLog(logFile(planDir), "Plan created.");
+
+			const relPath = path.relative(ctx.cwd, planDir);
+			const choice = await ctx.ui.select(`Plan created: ${relPath}\nWhat next?`, [
 				"Start now",
 				"Save for later",
 				"I have feedback",
 			]);
 
 			if (choice === "Start now") {
-				const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planPath)));
+				const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planDir)));
 				ensureDir(activeDir(ctx.cwd));
-				fs.renameSync(planPath, dest);
+				fs.renameSync(planDir, dest);
 				session.focusedPlan = dest; // Auto-focus this session on the new plan
 				return {
 					content: [{ type: "text", text: `Plan created, activated, and focused: ${dest}\nCall plan_execute to begin execution with guidelines.` }],
@@ -221,8 +227,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			if (choice === "Save for later") {
 				return {
-					content: [{ type: "text", text: `Plan saved for later: ${planPath}\nUse plan_activate or /activate-plan to activate it when ready.` }],
-					details: { planPath },
+					content: [{ type: "text", text: `Plan saved for later: ${planDir}\nUse plan_activate or /activate-plan to activate it when ready.` }],
+					details: { planPath: planDir },
 				};
 			}
 
@@ -232,20 +238,20 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				pi.sendMessage(
 					{
 						customType: "plan-feedback",
-						content: `The user has feedback on the plan at ${planPath}:\n\n${feedback}\n\nRead the plan, discuss with the user, and update or recreate it.`,
+						content: `The user has feedback on the plan at ${planDir}:\n\n${feedback}\n\nRead the plan, discuss with the user, and update or recreate it.`,
 						display: true,
 					},
 					{ triggerTurn: true },
 				);
 				return {
-					content: [{ type: "text", text: `Plan saved: ${planPath}\nDiscussing feedback with user.` }],
-					details: { planPath },
+					content: [{ type: "text", text: `Plan saved: ${planDir}\nDiscussing feedback with user.` }],
+					details: { planPath: planDir },
 				};
 			}
 
 			return {
-				content: [{ type: "text", text: `Plan saved: ${planPath}` }],
-				details: { planPath },
+				content: [{ type: "text", text: `Plan saved: ${planDir}` }],
+				details: { planPath: planDir },
 			};
 		},
 	});
@@ -259,14 +265,16 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"Begin executing the active plan. Reads the plan and returns it with execution guidelines. " +
 			"Call this after plan_create when the user chose 'Start now', or when resuming work on an active plan.",
 		parameters: Type.Object({
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
 			session.focusedPlan = planPath; // Auto-focus on execute
-			const content = fs.readFileSync(planPath, "utf-8");
+			const content = fs.readFileSync(planFile(planPath), "utf-8");
 			const steps = parseSteps(content);
 			const current = steps.find((s) => s.isCurrent);
+
+			appendLog(logFile(planPath), "Execution started.");
 
 			const guidelines = [
 				"## Execution Guidelines",
@@ -339,14 +347,14 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			add_step: Type.Optional(Type.String({ description: "Text of a new step to add" })),
 			after_step: Type.Optional(Type.Integer({ minimum: 1, description: "1-based step number to insert the new step after (default: append at end)" })),
 			log: Type.Optional(Type.String({ description: "A timestamped log entry to append (progress, decisions, notes)" })),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (params.complete_step === undefined && !params.add_step && !params.log) {
 				throw new Error("No action specified. Provide at least one of: complete_step, add_step, log.");
 			}
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planPath, "utf-8");
+			let content = fs.readFileSync(planFile(planPath), "utf-8");
 			const actions: string[] = [];
 
 			if (params.complete_step !== undefined) {
@@ -365,14 +373,35 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				content = content.replaceAll("<!-- VERIFIED -->", "");
 			}
 
+			fs.writeFileSync(planFile(planPath), content, "utf-8");
+
 			if (params.log) {
-				content = appendLog(content, params.log);
+				appendLog(logFile(planPath), params.log);
 				actions.push("added log entry");
 			}
 
-			fs.writeFileSync(planPath, content, "utf-8");
 			return {
 				content: [{ type: "text", text: `Updated plan: ${actions.join(", ")}\n${planPath}` }],
+				details: { planPath },
+			};
+		},
+	});
+
+	// -- plan_log ------------------------------------------------------------
+
+	pi.registerTool({
+		name: "plan_log",
+		label: "plan log",
+		description: "Add a log entry to the plan's log.md.",
+		parameters: Type.Object({
+			message: Type.String({ description: "The log message to append" }),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
+			appendLog(logFile(planPath), params.message);
+			return {
+				content: [{ type: "text", text: `Logged to ${planPath}` }],
 				details: { planPath },
 			};
 		},
@@ -396,11 +425,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			acceptance_checklist: Type.Optional(Type.Array(Type.String(), {
 				description: "Manual acceptance items. If omitted, reads from the plan's '## Verification / ### Manual Acceptance' section.",
 			})),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planPath, "utf-8");
+			let content = fs.readFileSync(planFile(planPath), "utf-8");
 
 			// Extract manual checklist from plan if not provided
 			let checklist = params.acceptance_checklist;
@@ -411,11 +440,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				checklist = ["All features work as described in the plan goal"];
 			}
 
-			// Log the verification attempt
 			// Clear any previous verification marker before starting new verification
 			content = content.replaceAll("<!-- VERIFIED -->", "");
-			content = appendLog(content, `Verification started. Automated: ${params.automated_results.split("\n")[0]}`);
-			fs.writeFileSync(planPath, content, "utf-8");
+			fs.writeFileSync(planFile(planPath), content, "utf-8");
+
+			// Log the verification attempt
+			appendLog(logFile(planPath), `Verification started. Automated: ${params.automated_results.split("\n")[0]}`);
 
 			// Show automated results + acceptance checklist to user
 			const checklistText = checklist
@@ -437,9 +467,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			]);
 
 			if (choice === "All verified, ready to finish") {
-				content = fs.readFileSync(planPath, "utf-8");
-				content = appendLog(content, "Verification passed. User approved.\n<!-- VERIFIED -->");
-				fs.writeFileSync(planPath, content, "utf-8");
+				content = fs.readFileSync(planFile(planPath), "utf-8");
+				content += "\n<!-- VERIFIED -->\n";
+				fs.writeFileSync(planFile(planPath), content, "utf-8");
+				appendLog(logFile(planPath), "Verification passed. User approved.");
 				return {
 					content: [{ type: "text", text: "Verification passed. Call `plan_finish` to complete the plan." }],
 					details: { planPath, verified: true },
@@ -448,9 +479,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			if (choice === "Some items failed — need fixes") {
 				const feedback = await ctx.ui.input("What needs to be fixed?", "Describe what failed or needs changes");
-				content = fs.readFileSync(planPath, "utf-8");
-				content = appendLog(content, `Verification failed. User feedback: ${feedback ?? "(no details)"}`);
-				fs.writeFileSync(planPath, content, "utf-8");
+				appendLog(logFile(planPath), `Verification failed. User feedback: ${feedback ?? "(no details)"}`);
 				return {
 					content: [{ type: "text", text: `Verification failed. Fix the issues and re-verify.\nUser feedback: ${feedback ?? "(no details)"}` }],
 					details: { planPath, verified: false },
@@ -475,11 +504,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"You should call plan_verify BEFORE this to run the acceptance phase.",
 		parameters: Type.Object({
 			summary: Type.Optional(Type.String({ description: "Brief completion summary to log" })),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planPath, "utf-8");
+			const content = fs.readFileSync(planFile(planPath), "utf-8");
 
 			// Check completion prerequisites
 			const steps = parseSteps(content);
@@ -493,12 +522,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			}
 
 			const logMsg = params.summary ? `Plan completed. ${params.summary}` : "Plan completed.";
-			content = appendLog(content, logMsg);
+			appendLog(logFile(planPath), logMsg);
 
 			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
 			ensureDir(doneDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(planPath);
+			fs.renameSync(planPath, dest);
 			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
 			return {
 				content: [{ type: "text", text: `Plan completed: ${dest}` }],
@@ -513,22 +541,20 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_abort",
 		label: "plan abort",
 		description:
-			"Abort the active plan. Logs the reason and moves it to done/.",
+			"Abort the active plan. Logs the reason and moves it to aborted/.",
 		parameters: Type.Object({
 			reason: Type.Optional(Type.String({ description: "Why the plan was aborted" })),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan file path (default: active plan)" })),
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planPath, "utf-8");
 
 			const logMsg = params.reason ? `Plan aborted. Reason: ${params.reason}` : "Plan aborted.";
-			content = appendLog(content, logMsg);
+			appendLog(logFile(planPath), logMsg);
 
-			const dest = safeDestPath(path.join(doneDir(ctx.cwd), path.basename(planPath)));
-			ensureDir(doneDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(planPath);
+			const dest = safeDestPath(path.join(abortedDir(ctx.cwd), path.basename(planPath)));
+			ensureDir(abortedDir(ctx.cwd));
+			fs.renameSync(planPath, dest);
 			if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
 			return {
 				content: [{ type: "text", text: `Plan aborted: ${dest}` }],
@@ -543,10 +569,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_resume",
 		label: "plan resume",
 		description:
-			"Resume a pending or done plan. Moves it to active/, logs a resumption entry. " +
-			"Multiple plans can be active simultaneously.",
+			"Resume a pending, done, or aborted plan. Moves it to active/, clears stale verification, " +
+			"and logs a resumption entry. Multiple plans can be active simultaneously.",
 		parameters: Type.Object({
-			plan_path: Type.String({ description: "Path to the plan file (in pending/ or done/)" }),
+			plan_path: Type.String({ description: "Path to the plan folder (in pending/, done/, or aborted/)" }),
 			reason: Type.Optional(Type.String({ description: "Why the plan is being resumed" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -555,17 +581,21 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
 			const parentDir = path.basename(path.dirname(planPath));
 			if (parentDir === "active") throw new Error(`Plan is already active: ${planPath}`);
-			if (parentDir !== "pending" && parentDir !== "done") throw new Error(`Can only resume plans from pending/ or done/, not ${parentDir}/`);
+			if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") {
+				throw new Error(`Can only resume plans from pending/, done/, or aborted/, not ${parentDir}/`);
+			}
 
-			let content = fs.readFileSync(planPath, "utf-8");
-			content = content.replaceAll("<!-- VERIFIED -->", ""); // Clear stale verification
+			// Clear stale verification from plan.md
+			let content = fs.readFileSync(planFile(planPath), "utf-8");
+			content = content.replaceAll("<!-- VERIFIED -->", "");
+			fs.writeFileSync(planFile(planPath), content, "utf-8");
+
 			const logMsg = params.reason ? `Plan resumed. ${params.reason}` : "Plan resumed.";
-			content = appendLog(content, logMsg);
+			appendLog(logFile(planPath), logMsg);
 
 			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planPath)));
 			ensureDir(activeDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(planPath);
+			fs.renameSync(planPath, dest);
 
 			const summary = planSummary(dest);
 			return {
@@ -600,11 +630,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_activate",
 		label: "plan activate",
 		description:
-			"Activate a plan by moving it to active/. " +
+			"Activate a plan by moving it from pending/ to active/. " +
 			"Multiple plans can be active simultaneously (for parallel agent instances). " +
 			"Active plans are indicated with ● in plan_list.",
 		parameters: Type.Object({
-			plan_path: Type.String({ description: "Path to the plan file to activate" }),
+			plan_path: Type.String({ description: "Path to the plan folder to activate" }),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const abs = path.isAbsolute(params.plan_path) ? params.plan_path : path.resolve(ctx.cwd, params.plan_path);
@@ -615,13 +645,13 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				const summary = planSummary(abs);
 				return { content: [{ type: "text", text: `Already active: ${summary}\n${abs}` }], details: {} };
 			}
-			if (parentDir !== "pending") throw new Error(`Can only activate plans from pending/, not ${parentDir}/. Use plan_resume for done/ plans.`);
-			let content = fs.readFileSync(abs, "utf-8");
-			content = appendLog(content, "Plan activated.");
+			if (parentDir !== "pending") throw new Error(`Can only activate plans from pending/, not ${parentDir}/. Use plan_resume for done/ or aborted/ plans.`);
+
+			appendLog(logFile(abs), "Plan activated.");
+
 			const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(abs)));
 			ensureDir(activeDir(ctx.cwd));
-			fs.writeFileSync(dest, content, "utf-8");
-			fs.unlinkSync(abs);
+			fs.renameSync(abs, dest);
 			const summary = planSummary(dest);
 			const activeCount = getActivePlans(ctx.cwd).length;
 			const countNote = activeCount > 1 ? ` (${activeCount} plans now active)` : "";

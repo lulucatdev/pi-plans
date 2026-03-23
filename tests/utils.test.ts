@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { slugify, safeDestPath, validatePlanPath, extractSlugFromPlanPath } from "../extensions/lib/utils.js";
+import { slugify, safeDestPath, validatePlanPath, extractSlugFromPlanPath, planFile, logFile } from "../extensions/lib/utils.js";
 
 describe("slugify", () => {
 	it("converts text to lowercase hyphenated slug", () => {
@@ -40,22 +40,22 @@ describe("safeDestPath", () => {
 	});
 
 	it("returns original path when no conflict", () => {
-		const dest = path.join(tmpDir, "test.md");
+		const dest = path.join(tmpDir, "test-plan");
 		expect(safeDestPath(dest)).toBe(dest);
 	});
 
-	it("appends -2 when file exists", () => {
-		const dest = path.join(tmpDir, "test.md");
-		fs.writeFileSync(dest, "");
-		expect(safeDestPath(dest)).toBe(path.join(tmpDir, "test-2.md"));
+	it("appends -2 when path exists (folder)", () => {
+		const dest = path.join(tmpDir, "test-plan");
+		fs.mkdirSync(dest);
+		expect(safeDestPath(dest)).toBe(path.join(tmpDir, "test-plan-2"));
 	});
 
 	it("increments suffix until non-conflicting", () => {
-		const dest = path.join(tmpDir, "test.md");
-		fs.writeFileSync(dest, "");
-		fs.writeFileSync(path.join(tmpDir, "test-2.md"), "");
-		fs.writeFileSync(path.join(tmpDir, "test-3.md"), "");
-		expect(safeDestPath(dest)).toBe(path.join(tmpDir, "test-4.md"));
+		const dest = path.join(tmpDir, "test-plan");
+		fs.mkdirSync(dest);
+		fs.mkdirSync(path.join(tmpDir, "test-plan-2"));
+		fs.mkdirSync(path.join(tmpDir, "test-plan-3"));
+		expect(safeDestPath(dest)).toBe(path.join(tmpDir, "test-plan-4"));
 	});
 });
 
@@ -63,45 +63,46 @@ describe("validatePlanPath", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		// Use realpathSync to resolve macOS /var -> /private/var symlinks
 		tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-plans-validate-")));
-		// Create a fake .git so findProjectRoot works
 		fs.mkdirSync(path.join(tmpDir, ".git"));
-		fs.mkdirSync(path.join(tmpDir, ".pi", "plans", "active"), { recursive: true });
+		fs.mkdirSync(path.join(tmpDir, ".pi", "plans", "active", "20260323074203-test"), { recursive: true });
 	});
 
 	afterEach(() => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("accepts valid plan path", () => {
+	it("accepts valid plan folder path", () => {
 		expect(() => validatePlanPath(
-			path.join(tmpDir, ".pi", "plans", "active", "test.md"),
+			path.join(tmpDir, ".pi", "plans", "active", "20260323074203-test"),
 			tmpDir,
 		)).not.toThrow();
 	});
 
 	it("rejects path outside .pi/plans/", () => {
 		expect(() => validatePlanPath(
-			path.join(tmpDir, "README.md"),
+			path.join(tmpDir, "some-other-dir"),
 			tmpDir,
 		)).toThrow("not within .pi/plans/");
-	});
-
-	it("rejects non-.md files", () => {
-		expect(() => validatePlanPath(
-			path.join(tmpDir, ".pi", "plans", "active", "test.txt"),
-			tmpDir,
-		)).toThrow("must be .md");
 	});
 });
 
 describe("extractSlugFromPlanPath", () => {
-	it("extracts slug from timestamped filename", () => {
-		expect(extractSlugFromPlanPath("/path/to/20260323-1430-auth-refactor.md")).toBe("auth-refactor");
+	it("extracts slug from timestamped folder name", () => {
+		expect(extractSlugFromPlanPath("/path/to/20260323074203-auth-refactor")).toBe("auth-refactor");
 	});
 
-	it("returns full basename when no timestamp prefix", () => {
-		expect(extractSlugFromPlanPath("/path/to/my-plan.md")).toBe("my-plan");
+	it("returns full name when no timestamp prefix", () => {
+		expect(extractSlugFromPlanPath("/path/to/my-plan")).toBe("my-plan");
+	});
+});
+
+describe("planFile / logFile", () => {
+	it("returns plan.md path inside folder", () => {
+		expect(planFile("/path/to/plan-folder")).toBe("/path/to/plan-folder/plan.md");
+	});
+
+	it("returns log.md path inside folder", () => {
+		expect(logFile("/path/to/plan-folder")).toBe("/path/to/plan-folder/log.md");
 	});
 });

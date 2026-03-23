@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { logTs } from "./utils.js";
 import type { Step, Verification } from "./types.js";
 
@@ -41,10 +42,6 @@ export function renderPlan(title: string, goal: string, steps: string[], archite
 			lines.push("");
 		}
 	}
-	lines.push("## Log");
-	lines.push("");
-	lines.push(`**${logTs()}** — Plan created.`);
-	lines.push("");
 	return lines.join("\n");
 }
 
@@ -143,9 +140,8 @@ export function addStep(content: string, text: string, afterIndex?: number): str
 		if (lastStep) {
 			lines.splice(lastStep.lineNum + 1, 0, newLine);
 		} else {
-			const logIdx = lines.findIndex((l) => l.startsWith("## Log"));
-			const insertAt = logIdx >= 0 ? logIdx : lines.length;
-			lines.splice(insertAt, 0, newLine, "");
+			// No steps found — append at the end of the steps section or file
+			lines.push(newLine, "");
 		}
 	}
 
@@ -168,7 +164,20 @@ export function renderResearchDoc(topic: string, planName?: string): string {
 	return lines.join("\n");
 }
 
-export function appendLog(content: string, message: string): string {
+/** Return initial content for a new log.md file. */
+export function renderLogHeader(): string {
+	return `# Plan Log\n\n> Append-only operation log\n`;
+}
+
+/** Append a timestamped log entry to a log file. Creates the file with a header if it doesn't exist. */
+export function appendLog(logFilePath: string, message: string): void {
+	let content: string;
+	if (fs.existsSync(logFilePath)) {
+		content = fs.readFileSync(logFilePath, "utf-8");
+	} else {
+		content = renderLogHeader();
+	}
 	const trimmed = content.trimEnd();
-	return `${trimmed}\n\n**${logTs()}** — ${message}\n`;
+	const updated = `${trimmed}\n\n**${logTs()}** -- ${message}\n`;
+	fs.writeFileSync(logFilePath, updated, "utf-8");
 }

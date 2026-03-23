@@ -12,7 +12,7 @@ export function slugify(text: string): string {
 export function ts(): string {
 	const d = new Date();
 	const p = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+	return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 export function logTs(): string {
@@ -47,39 +47,49 @@ export function doneDir(cwd: string): string {
 	return path.join(plansDir(cwd), "done");
 }
 
+export function abortedDir(cwd: string): string {
+	return path.join(plansDir(cwd), "aborted");
+}
+
+export function planFile(planDir: string): string {
+	return path.join(planDir, "plan.md");
+}
+
+export function logFile(planDir: string): string {
+	return path.join(planDir, "log.md");
+}
+
 export function researchDir(cwd: string, planSlug?: string): string {
 	return path.join(plansDir(cwd), "research", planSlug ?? "_standalone");
 }
 
-/** Extract slug from plan filename: "20260323-1430-auth-refactor.md" → "auth-refactor" */
-export function extractSlugFromPlanPath(planPath: string): string {
-	const basename = path.basename(planPath, ".md");
-	// Remove YYYYMMDD-HHmm- prefix
-	return basename.replace(/^\d{8}-\d{4}-/, "") || basename;
+export function planResearchDir(planDir: string): string {
+	return path.join(planDir, "research");
 }
 
-/** Return a non-conflicting path. If dest exists, appends -2, -3, etc. before .md */
+/** Extract slug from plan folder name: "20260323074203-auth-refactor" -> "auth-refactor" */
+export function extractSlugFromPlanPath(planPath: string): string {
+	const folderName = path.basename(planPath);
+	// Remove YYYYMMDDHHmmss- prefix (14 digits + hyphen)
+	return folderName.replace(/^\d{14}-/, "") || folderName;
+}
+
+/** Return a non-conflicting path. If dest exists (file or directory), appends -2, -3, etc. */
 export function safeDestPath(dest: string): string {
 	if (!fs.existsSync(dest)) return dest;
-	const dir = path.dirname(dest);
-	const ext = path.extname(dest);
-	const base = path.basename(dest, ext);
 	let i = 2;
-	while (fs.existsSync(path.join(dir, `${base}-${i}${ext}`))) i++;
-	return path.join(dir, `${base}-${i}${ext}`);
+	while (fs.existsSync(`${dest}-${i}`)) i++;
+	return `${dest}-${i}`;
 }
 
-/** Validate that a path is within .pi/plans/ and is a .md file. Resolves symlinks. */
+/** Validate that a path is a directory within .pi/plans/. Resolves symlinks. */
 export function validatePlanPath(filePath: string, cwd: string): void {
 	const abs = path.resolve(filePath);
 	const plans = path.resolve(plansDir(cwd));
-	// Resolve symlinks if the file exists to prevent symlink escape
+	// Resolve symlinks if the path exists to prevent symlink escape
 	const real = fs.existsSync(abs) ? fs.realpathSync(abs) : abs;
 	const realPlans = fs.existsSync(plans) ? fs.realpathSync(plans) : plans;
 	if (!real.startsWith(realPlans + path.sep) && real !== realPlans) {
 		throw new Error(`Path is not within .pi/plans/: ${filePath}`);
-	}
-	if (!real.endsWith(".md")) {
-		throw new Error(`Not a plan file (must be .md): ${filePath}`);
 	}
 }

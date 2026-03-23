@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { parseSteps, completeStep, addStep, appendLog, parseManualAcceptance, renderPlan, renderResearchDoc } from "../extensions/lib/format.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderLogHeader, appendLog } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -23,10 +26,6 @@ const samplePlan = `# Test Plan
 ### Manual Acceptance
 - [ ] Feature works correctly
 - [ ] No regressions
-
-## Log
-
-**2026-03-23 14:00** — Plan created.
 `;
 
 describe("parseSteps", () => {
@@ -43,7 +42,6 @@ describe("parseSteps", () => {
 	});
 
 	it("does NOT parse checkboxes outside ## Steps", () => {
-		// Manual Acceptance has checkboxes too — they should NOT be parsed
 		const steps = parseSteps(samplePlan);
 		const texts = steps.map((s) => s.text);
 		expect(texts).not.toContain("Feature works correctly");
@@ -51,7 +49,7 @@ describe("parseSteps", () => {
 	});
 
 	it("handles case-insensitive ## Steps heading", () => {
-		const plan = "## steps\n\n- [ ] A step\n\n## Log\n";
+		const plan = "## steps\n\n- [ ] A step\n\n## Verification\n";
 		const steps = parseSteps(plan);
 		expect(steps).toHaveLength(1);
 		expect(steps[0].text).toBe("A step");
@@ -65,7 +63,7 @@ describe("parseSteps", () => {
 
 describe("completeStep", () => {
 	it("marks a step as done and advances current", () => {
-		const result = completeStep(samplePlan, 1); // complete step 2 (0-indexed)
+		const result = completeStep(samplePlan, 1);
 		const steps = parseSteps(result);
 		expect(steps[1].done).toBe(true);
 		expect(steps[1].isCurrent).toBe(false);
@@ -73,13 +71,13 @@ describe("completeStep", () => {
 	});
 
 	it("allows completing non-current step (out of order)", () => {
-		// Complete step 3 (index 2) while step 2 is current — should work
 		const result = completeStep(samplePlan, 2);
 		const steps = parseSteps(result);
 		expect(steps[2].done).toBe(true);
-		// Should not have multiple current markers
+		// Current should point to earliest remaining incomplete (step 2, index 1)
 		const currentSteps = steps.filter((s) => s.isCurrent);
-		expect(currentSteps.length).toBeLessThanOrEqual(1);
+		expect(currentSteps.length).toBe(1);
+		expect(currentSteps[0].index).toBe(1);
 	});
 
 	it("throws on already completed step", () => {
@@ -107,7 +105,7 @@ describe("addStep", () => {
 	});
 
 	it("marks new step as current when all steps are done", () => {
-		const allDone = `## Steps\n\n- [x] Done one\n- [x] Done two\n\n## Log\n`;
+		const allDone = `## Steps\n\n- [x] Done one\n- [x] Done two\n`;
 		const result = addStep(allDone, "New work");
 		const steps = parseSteps(result);
 		expect(steps[2].isCurrent).toBe(true);
@@ -123,10 +121,37 @@ describe("addStep", () => {
 });
 
 describe("appendLog", () => {
-	it("appends a timestamped entry", () => {
-		const result = appendLog("## Log\n\nOld entry.\n", "New entry.");
-		expect(result).toContain("New entry.");
-		expect(result).toMatch(/\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\*\* — New entry\./);
+	let tmpDir: string;
+	let logPath: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-plans-log-"));
+		logPath = path.join(tmpDir, "log.md");
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("creates log file with header if it doesn't exist", () => {
+		appendLog(logPath, "First entry");
+		const content = fs.readFileSync(logPath, "utf-8");
+		expect(content).toContain("# Plan Log");
+		expect(content).toContain("First entry");
+	});
+
+	it("appends to existing log file", () => {
+		appendLog(logPath, "First");
+		appendLog(logPath, "Second");
+		const content = fs.readFileSync(logPath, "utf-8");
+		expect(content).toContain("First");
+		expect(content).toContain("Second");
+	});
+
+	it("includes timestamps", () => {
+		appendLog(logPath, "Test entry");
+		const content = fs.readFileSync(logPath, "utf-8");
+		expect(content).toMatch(/\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\*\* -- Test entry/);
 	});
 });
 
@@ -137,7 +162,7 @@ describe("parseManualAcceptance", () => {
 	});
 
 	it("handles case-insensitive heading", () => {
-		const plan = "### manual acceptance\n- [ ] Item A\n- Item B\n## Log\n";
+		const plan = "### manual acceptance\n- [ ] Item A\n- Item B\n## Other\n";
 		const items = parseManualAcceptance(plan);
 		expect(items).toEqual(["Item A", "Item B"]);
 	});
@@ -148,21 +173,21 @@ describe("parseManualAcceptance", () => {
 	});
 
 	it("handles numbered lists", () => {
-		const plan = "### Manual Acceptance\n1. First\n2. Second\n## Log\n";
+		const plan = "### Manual Acceptance\n1. First\n2. Second\n## Other\n";
 		const items = parseManualAcceptance(plan);
 		expect(items).toEqual(["First", "Second"]);
 	});
 });
 
 describe("renderPlan", () => {
-	it("generates plan with goal and steps", () => {
+	it("generates plan with goal and steps, no log section", () => {
 		const result = renderPlan("Test", "Build a thing", ["Step A", "Step B"]);
 		expect(result).toContain("# Test");
 		expect(result).toContain("**Goal:** Build a thing");
 		expect(result).toContain("- [ ] **Step A** ← current");
 		expect(result).toContain("- [ ] Step B");
 		expect(result).toContain("## Steps");
-		expect(result).toContain("## Log");
+		expect(result).not.toContain("## Log");
 	});
 
 	it("includes architecture when provided", () => {
@@ -199,5 +224,13 @@ describe("renderResearchDoc", () => {
 	it("uses 'standalone' when no plan name", () => {
 		const result = renderResearchDoc("General topic");
 		expect(result).toContain("> Plan: standalone");
+	});
+});
+
+describe("renderLogHeader", () => {
+	it("generates log header", () => {
+		const result = renderLogHeader();
+		expect(result).toContain("# Plan Log");
+		expect(result).toContain("Append-only");
 	});
 });

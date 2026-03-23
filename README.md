@@ -1,6 +1,6 @@
 # pi-plans
 
-A text-based project manager for [pi](https://github.com/mariozechner/pi). Plans are living markdown documents with checkbox steps, timestamped logs, and full lifecycle management.
+A text-based project manager for [pi](https://github.com/mariozechner/pi). Plans are folder-based living documents with steps, append-only logs, and integrated research.
 
 Plans are opt-in. Nothing is injected into the system prompt until you explicitly start and activate a plan. Once active, the agent is prompted to track progress using plan tools as it works.
 
@@ -14,30 +14,31 @@ pi install git:github.com/lulucatdev/pi-plans
 
 | Command | Description |
 |---------|-------------|
-| `/start-plan [topic]` | Begin a planning session (research, discuss, create) |
+| `/start-plan [topic]` | Begin a planning session (research, brainstorm, create) |
 | `/plans` | List all plans with status and progress |
-| `/activate-plan <path>` | Activate a plan (enables automatic tracking) |
-| `/deactivate-plan [path]` | Deactivate an active plan (moves to `pending/`). Path required when multiple active. |
+| `/activate-plan <path>` | Activate a pending plan |
+| `/deactivate-plan [path]` | Deactivate an active plan (moves to `pending/`) |
 | `/finish-plan [summary]` | Mark active plan as completed, move to `done/` |
-| `/abort-plan [reason]` | Abort active plan, move to `done/` |
-| `/resume-plan <path>` | Restore a plan from `pending/` or `done/` |
+| `/abort-plan [reason]` | Abort active plan, move to `aborted/` |
+| `/resume-plan <path>` | Restore a plan from `pending/`, `done/`, or `aborted/` |
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `plan_focus` | Bind this session to a specific plan. Subsequent tool calls default to it without needing `plan_path`. |
-| `plan_research` | Create a research document at `.pi/plans/research/<plan>/<topic>.md`. Write findings into it with the write tool. |
+| `plan_focus` | Bind this session to a specific plan folder. Subsequent tool calls default to it. |
+| `plan_research` | Create a research document inside the plan's `research/` subfolder. Write findings with the write tool. |
 | `plan_brainstorm` | Ask the user a question via UI dialog (select or free-text). Used for all interaction before `plan_create`. |
-| `plan_create` | Create a new plan; prompts user to start now, save for later, or give feedback |
-| `plan_execute` | Begin execution of the active plan with guidelines (verification, debugging, research, pivot policy) |
-| `plan_update` | Mark steps complete, add steps, log progress/decisions |
-| `plan_verify` | Acceptance phase: present automated test results + manual checklist to user for approval |
-| `plan_finish` | Mark plan completed, move to `done/`. Call `plan_verify` first. |
-| `plan_abort` | Abort plan with reason, move to `done/` |
-| `plan_resume` | Move a `pending/` or `done/` plan to `active/` |
-| `plan_list` | List plans with status filter (`active`, `pending`, `done`) |
-| `plan_activate` | Move a plan to `active/`. Multiple plans can be active simultaneously. |
+| `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Prompts: start now, save for later, or feedback. |
+| `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
+| `plan_update` | Mark steps complete, add steps. Logs to `log.md`. |
+| `plan_log` | Add a log entry to the plan's `log.md`. |
+| `plan_verify` | Acceptance phase: present automated test results + manual checklist to user for approval. |
+| `plan_finish` | Mark plan completed, move to `done/`. Requires all steps done + verification passed. |
+| `plan_abort` | Abort plan with reason, move to `aborted/`. |
+| `plan_resume` | Resume a plan from `pending/`, `done/`, or `aborted/` to `active/`. |
+| `plan_list` | List plans with status filter (`active`, `pending`, `done`). |
+| `plan_activate` | Move a pending plan to `active/`. Multiple plans can be active simultaneously. |
 
 ## How it works
 
@@ -46,6 +47,7 @@ pi install git:github.com/lulucatdev/pi-plans
 
   Phase 1: Research
   agent explores codebase + web (tasks, exa, web_search)
+  → plan_research(topic)                  ← creates research doc, agent writes findings
 
   Phase 2: Brainstorm
   → plan_brainstorm(question, options)    ← clarifying questions via UI dialogs
@@ -53,49 +55,54 @@ pi install git:github.com/lulucatdev/pi-plans
   → plan_brainstorm(question, options)    ← confirm design
 
   Phase 3: Create
-  → plan_create(name, goal, steps)        ← plan saved to pending/
+  → plan_create(name, goal, steps)        ← plan folder created in pending/
   user picks "Start now"                  ← moved to active/
 
   Phase 4: Execute
   → plan_execute()                        ← returns plan + execution guidelines
   agent implements step 1
-  → plan_update(complete_step: 1)         ← step done (verified), current advances
-  → plan_update(log: "decided on JWT")    ← decision recorded
-  ...if stuck, call plan_research(topic)  ← creates research doc, agent writes findings
+  → plan_update(complete_step: 1)         ← step done, current advances
+  → plan_log(message: "decided on JWT")   ← logged to log.md
+  → plan_research(topic)                  ← research doc inside plan folder
   ...all steps done...
 
   Phase 5: Verify
-  → plan_verify(automated_results)             ← user acceptance
+  → plan_verify(automated_results)        ← user acceptance
   → plan_finish()                         ← moved to done/
 ```
 
-## Plan file format
+## Plan folder structure
 
 Plans live under `<project>/.pi/plans/` in subdirectories that represent their status:
 
 ```
 .pi/plans/
-├── active/       ← 0+ plans being worked on (multiple agents can work in parallel)
-├── pending/      ← plans saved for later
-├── done/         ← completed or aborted plans
-└── research/     ← research documents, organized by plan
-    └── <plan-slug>/
-        ├── oauth-best-practices.md
-        └── jwt-vs-session.md
+├── active/                                    ← 0+ plans being worked on
+│   └── 20260323074203-auth-refactor/
+│       ├── plan.md                            ← goal, architecture, steps, verification
+│       ├── log.md                             ← append-only operation log
+│       └── research/
+│           ├── 20260323074510-oauth-flows.md
+│           └── 20260323075200-jwt-comparison.md
+├── pending/                                   ← plans saved for later
+├── done/                                      ← completed plans
+├── aborted/                                   ← aborted plans
+└── research/
+    └── _standalone/                           ← research without a plan
 ```
 
-Directory = status. No pointer files, no in-file status fields. Moving a file between directories is a state transition.
+Directory = status. Moving a folder between directories is a state transition.
 
-Example plan at `.pi/plans/active/20260322-1730-auth-refactor.md`:
+### plan.md
 
 ```markdown
 # Auth Refactor
 
-> Created: 2026-03-22 17:30
+> Created: 2026-03-23 07:42
 
 **Goal:** Refactor authentication to support OAuth 2.0 with PKCE flow.
 
-**Architecture:** Extract auth logic into standalone module, add PKCE middleware, JWT access tokens with opaque refresh tokens stored in SQLite.
+**Architecture:** Extract auth logic into standalone module, add PKCE middleware.
 
 ---
 
@@ -116,23 +123,29 @@ Example plan at `.pi/plans/active/20260322-1730-auth-refactor.md`:
 ### Manual Acceptance
 - [ ] OAuth login flow works with Google
 - [ ] Token refresh works after expiry
-- [ ] Error page renders on auth failure
+```
 
-## Log
+### log.md
 
-**2026-03-22 17:30** — Plan created.
-**2026-03-22 18:15** — Decided on PKCE for public clients. JWT access, opaque refresh.
-**2026-03-22 19:00** — Completed schema. Two tables: tokens, sessions.
+```markdown
+# Plan Log
+
+> Append-only operation log
+
+**2026-03-23 07:42** -- Plan created.
+**2026-03-23 07:45** -- Execution started.
+**2026-03-23 08:15** -- Researching: OAuth 2.0 PKCE flow → research/20260323081500-oauth-flows.md
+**2026-03-23 09:00** -- Completed step 1. Decided on PKCE for public clients.
 ```
 
 ## Design philosophy
 
-Follows the [pi developer's guidance](https://github.com/mariozechner/pi) on planning:
-
-- Plans are files in the project, not ephemeral session state.
+- Plans are folders in the project, not ephemeral session state.
 - The agent reads, updates, and references the plan as it works.
-- Full observability: the user can see and edit the plan at any time.
+- Full observability: the user can see and edit any file at any time.
 - No magic: plans are plain markdown, version-controllable, human-editable.
+- Research results persist alongside the plan they belong to.
+- Logs are append-only — corrections are made by adding new entries.
 
 ## License
 

@@ -24,7 +24,7 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 			return {
 				systemPrompt: event.systemPrompt +
 					`\n\n## Active Plan\n\nA planPath was provided: ${session.planGate.planPath}. ` +
-					"Read it before editing any files. Use `plan_update` to mark steps complete and log progress as you work.\n",
+					"Read plan.md inside that folder before editing any files. Use `plan_update` to mark steps complete and log progress as you work.\n",
 			};
 		}
 
@@ -64,6 +64,11 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 		const raw = typeof event.input.path === "string" ? event.input.path : "";
 		if (!raw) return;
 		const resolved = path.isAbsolute(raw) ? raw : path.resolve(ctx.cwd, raw);
-		if (resolved === session.planGate.planPath) session.planGate.satisfied = true;
+		// Plan paths are now folders. Satisfy the gate if the agent reads any file
+		// inside the plan folder (e.g. plan.md, log.md, research/*).
+		const planDir = session.planGate.planPath;
+		if (resolved === planDir || resolved.startsWith(planDir + path.sep)) {
+			session.planGate.satisfied = true;
+		}
 	});
 }

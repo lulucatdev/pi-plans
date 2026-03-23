@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, plansDir, ensureDir, safeDestPath } from "./utils.js";
+import { activeDir, pendingDir, doneDir, plansDir, ensureDir, safeDestPath, planFile } from "./utils.js";
 import { parseSteps } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
@@ -10,20 +10,32 @@ export const session: SessionState = {
 	planGate: undefined,
 };
 
-/** Returns all plans in active/. */
+/** Returns true if the given directory is a valid plan folder (contains plan.md). */
+function isPlanDir(dirPath: string): boolean {
+	try {
+		const stat = fs.statSync(dirPath);
+		return stat.isDirectory() && fs.existsSync(planFile(dirPath));
+	} catch {
+		return false;
+	}
+}
+
+/** Returns all plan folders in active/. */
 export function getActivePlans(cwd: string): string[] {
 	const dir = activeDir(cwd);
 	if (!fs.existsSync(dir)) return [];
-	return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => path.join(dir, f));
+	return fs.readdirSync(dir)
+		.map((f) => path.join(dir, f))
+		.filter(isPlanDir);
 }
 
-/** Returns the single plan in active/ if there is exactly one, or undefined. */
+/** Returns the single plan folder in active/ if there is exactly one, or undefined. */
 export function getActivePlan(cwd: string): string | undefined {
 	const plans = getActivePlans(cwd);
 	return plans.length === 1 ? plans[0] : undefined;
 }
 
-/** Move a specific active plan to pending/. Validates the plan is in active/. */
+/** Move a specific active plan folder to pending/. Validates the plan is in active/. */
 export function parkActivePlan(cwd: string, planPath: string) {
 	const parentDir = path.basename(path.dirname(planPath));
 	if (parentDir !== "active") throw new Error(`Can only deactivate plans in active/, not ${parentDir}/: ${planPath}`);
@@ -50,12 +62,12 @@ export function resolvePlanArg(planPath: string | undefined, cwd: string, focuse
 	return activePlans[0];
 }
 
-/** Extract planPath from a prompt string (for child worker gate). Only matches .pi/plans/ paths. Handles paths with spaces when backtick-quoted. */
+/** Extract planPath from a prompt string (for child worker gate). Only matches .pi/plans/ folder paths. Handles paths with spaces when backtick-quoted. */
 export function extractPlanPath(prompt: string): string | undefined {
-	const m = prompt.match(/planPath\s*[:=]\s*`([^`]*\.pi\/plans\/[^`]*\.md)`/i)  // backtick-quoted (handles spaces)
-		?? prompt.match(/planPath\s*[:=]\s*([^\s`]*\.pi\/plans\/[^\s`]*\.md)/i)     // unquoted (no spaces)
-		?? prompt.match(/`([^`]*\.pi\/plans\/[^`]*\.md)`/)                          // any backtick-quoted .pi/plans path
-		?? prompt.match(/(\/[^\s`"']*\.pi\/plans\/[^\s`"']*\.md)/);                 // bare absolute path (no spaces)
+	const m = prompt.match(/planPath\s*[:=]\s*`([^`]*\.pi\/plans\/[^`]+?)\/?`/i)      // backtick-quoted (handles spaces)
+		?? prompt.match(/planPath\s*[:=]\s*([^\s`]*\.pi\/plans\/[^\s`]+?)\/?(?=[\s`]|$)/i) // unquoted (no spaces)
+		?? prompt.match(/`([^`]*\.pi\/plans\/[^`]+?)\/?`/)                                 // any backtick-quoted .pi/plans path
+		?? prompt.match(/(\/[^\s`"']*\.pi\/plans\/[^\s`"']+?)\/?(?=[\s`"']|$)/);           // bare absolute path (no spaces)
 	return m?.[1];
 }
 
@@ -63,7 +75,7 @@ export function isReadOnlyTool(name: string): boolean {
 	return ["read", "list", "ls", "grep", "glob", "find", "plan_list", "plan_brainstorm"].includes(name);
 }
 
-/** Derive status from the plan's parent directory name. */
+/** Derive status from the plan folder's parent directory name. */
 export function statusFromPath(planPath: string): string {
 	const dir = path.basename(path.dirname(planPath));
 	if (dir === "active") return "active";
@@ -73,13 +85,13 @@ export function statusFromPath(planPath: string): string {
 }
 
 export function planSummary(planPath: string): string {
-	const content = fs.readFileSync(planPath, "utf-8");
+	const content = fs.readFileSync(planFile(planPath), "utf-8");
 	const steps = parseSteps(content);
 	const done = steps.filter((s) => s.done).length;
 	const total = steps.length;
 	const status = statusFromPath(planPath);
 	const titleMatch = content.match(/^# (.+)/m);
-	const title = titleMatch?.[1] ?? path.basename(planPath, ".md");
+	const title = titleMatch?.[1] ?? path.basename(planPath);
 	const current = steps.find((s) => s.isCurrent);
 	const currentText = current ? ` → ${current.text}` : "";
 	return `[${status}] ${done}/${total} ${title}${currentText}`;
@@ -91,11 +103,12 @@ export function listAllPlans(cwd: string, statusFilter?: string): PlanEntry[] {
 
 	for (const dir of dirs) {
 		if (!fs.existsSync(dir)) continue;
-		for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+		for (const f of fs.readdirSync(dir)) {
 			const fullPath = path.join(dir, f);
+			if (!isPlanDir(fullPath)) continue;
 			const summary = planSummary(fullPath);
 			const isActive = path.basename(dir) === "active";
-			results.push({ name: f.replace(/\.md$/, ""), path: fullPath, summary, isActive });
+			results.push({ name: f, path: fullPath, summary, isActive });
 		}
 	}
 
