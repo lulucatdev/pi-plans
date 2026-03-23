@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, plansDir, ensureDir, safeDestPath, planFile } from "./utils.js";
+import { activeDir, pendingDir, doneDir, abortedDir, plansDir, ensureDir, safeDestPath, planFile } from "./utils.js";
 import { parseSteps } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
@@ -81,6 +81,7 @@ export function statusFromPath(planPath: string): string {
 	if (dir === "active") return "active";
 	if (dir === "pending") return "pending";
 	if (dir === "done") return "done";
+	if (dir === "aborted") return "aborted";
 	return "unknown";
 }
 
@@ -98,7 +99,7 @@ export function planSummary(planPath: string): string {
 }
 
 export function listAllPlans(cwd: string, statusFilter?: string): PlanEntry[] {
-	const dirs = [activeDir(cwd), pendingDir(cwd), doneDir(cwd)];
+	const dirs = [activeDir(cwd), pendingDir(cwd), doneDir(cwd), abortedDir(cwd)];
 	const results: { name: string; path: string; summary: string; isActive: boolean }[] = [];
 
 	for (const dir of dirs) {

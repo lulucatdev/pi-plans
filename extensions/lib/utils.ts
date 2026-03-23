@@ -74,12 +74,14 @@ export function extractSlugFromPlanPath(planPath: string): string {
 	return folderName.replace(/^\d{14}-/, "") || folderName;
 }
 
-/** Return a non-conflicting path. If dest exists (file or directory), appends -2, -3, etc. */
+/** Return a non-conflicting path. If dest exists (file or directory), appends -2, -3, etc. Preserves file extension. */
 export function safeDestPath(dest: string): string {
 	if (!fs.existsSync(dest)) return dest;
+	const ext = path.extname(dest);
+	const base = ext ? dest.slice(0, -ext.length) : dest;
 	let i = 2;
-	while (fs.existsSync(`${dest}-${i}`)) i++;
-	return `${dest}-${i}`;
+	while (fs.existsSync(`${base}-${i}${ext}`)) i++;
+	return `${base}-${i}${ext}`;
 }
 
 /** Validate that a path is a directory within .pi/plans/. Resolves symlinks. */
