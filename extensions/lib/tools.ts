@@ -1,11 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
-import { renderPlan, renderResearchDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
-import { getActivePlans, getActivePlan, resolvePlanArg, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
+import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planReviewDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
+import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
+import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
+
+interface BrainstormQuestion {
+	id: string;
+	question: string;
+	context?: string;
+	options: string[];
+	recommended?: number; // 0-based index of the recommended option
+}
+
+interface BrainstormAnswer {
+	id: string;
+	question: string;
+	answer: string;
+	wasCustom: boolean;
+}
+
+interface BrainstormResult {
+	questions: BrainstormQuestion[];
+	answers: BrainstormAnswer[];
+	cancelled: boolean;
+}
 
 export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 	// -- plan_focus ----------------------------------------------------------
@@ -123,44 +145,452 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_brainstorm",
 		label: "plan brainstorm",
 		description:
-			"Ask the user a single question during brainstorming via a UI dialog. " +
+			"Ask the user one or more brainstorming questions via a UI questionnaire. " +
 			"Use for ALL user interactions before plan_create. " +
-			"If options provided → selection dialog; if not → free-text input. " +
-			"Call multiple times, one question at a time. Prefer options when possible. " +
-			"Returns the user's answer or 'dismissed' if they cancelled.",
+			"Each question can have suggested options, but always includes free-text input. " +
+			"Use `recommended` to mark the best option (shown with ★, cursor defaults to it). " +
+			"Batch related questions into one call. Returns Q&A records.",
 		parameters: Type.Object({
-			question: Type.String({ description: "The question to ask. Be specific and concise." }),
-			context: Type.Optional(Type.String({
-				description: "Background info shown with the question (trade-offs, approach details)",
-			})),
-			options: Type.Optional(Type.Array(Type.String(), {
-				description: "Multiple-choice options. Shows select dialog instead of text input.",
-			})),
+			questions: Type.Array(
+				Type.Object({
+					id: Type.String({ description: "Short identifier, e.g. 'scope', 'priority'" }),
+					question: Type.String({ description: "The question to ask" }),
+					context: Type.Optional(Type.String({ description: "Background info (trade-offs, details)" })),
+					options: Type.Optional(Type.Array(Type.String(), { description: "Suggested answers" })),
+					recommended: Type.Optional(Type.Integer({ minimum: 0, description: "0-based index of the recommended option. Shown with ★ and cursor defaults to it." })),
+				}),
+				{ minItems: 1 },
+			),
 		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const title = params.context
-				? `${params.question}\n\n${params.context}`
-				: params.question;
 
-			let answer: string | undefined;
-			if (params.options && params.options.length > 0) {
-				answer = await ctx.ui.select(title, params.options);
-			} else {
-				answer = await ctx.ui.input(title, "Type your answer...");
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: "Error: UI not available (running in non-interactive mode)" }],
+					details: { questions: [], answers: [], cancelled: true } as BrainstormResult,
+				};
 			}
 
-			// Return full Q&A record so it remains visible in conversation history
-			const record = [
-				`**Q:** ${params.question}`,
-				params.context ? `\n${params.context}` : "",
-				params.options?.length ? `\nOptions: ${params.options.join(" / ")}` : "",
-				`\n**A:** ${answer ?? "(dismissed)"}`,
-			].filter(Boolean).join("");
+			// Normalize questions and validate unique ids
+			const seenIds = new Set<string>();
+			const questions: BrainstormQuestion[] = params.questions.map((q, i) => {
+				let id = q.id;
+				if (seenIds.has(id)) id = `${id}-${i + 1}`;
+				seenIds.add(id);
+				const opts = q.options ?? [];
+				const rec = q.recommended !== undefined && q.recommended >= 0 && q.recommended < opts.length ? q.recommended : undefined;
+				return { ...q, id, options: opts, recommended: rec };
+			});
+
+			const isMulti = questions.length > 1;
+			const totalTabs = questions.length + 1; // questions + Submit
+
+			const result = await ctx.ui.custom<BrainstormResult>((tui, theme, _kb, done) => {
+				let currentTab = 0;
+				let optionIndex = 0;
+				let inputMode = false;
+				let inputQuestionId: string | null = null;
+				let cachedLines: string[] | undefined;
+				const answers = new Map<string, BrainstormAnswer>();
+				const drafts = new Map<string, string>(); // per-question unsaved editor text
+
+				const editorTheme: EditorTheme = {
+					borderColor: (s) => theme.fg("accent", s),
+					selectList: {
+						selectedPrefix: (t) => theme.fg("accent", t),
+						selectedText: (t) => theme.fg("accent", t),
+						description: (t) => theme.fg("muted", t),
+						scrollInfo: (t) => theme.fg("dim", t),
+						noMatch: (t) => theme.fg("warning", t),
+					},
+				};
+				const editor = new Editor(tui, editorTheme);
+
+				function refresh() {
+					cachedLines = undefined;
+					tui.requestRender();
+				}
+
+				function submit(cancelled: boolean) {
+					// Return answers in question definition order
+					const ordered = questions.map((q) => answers.get(q.id)).filter((a): a is BrainstormAnswer => !!a);
+					done({ questions, answers: ordered, cancelled });
+				}
+
+				function currentQuestion(): BrainstormQuestion | undefined {
+					return questions[currentTab];
+				}
+
+				/** Options to display: the question's options + always a "Write your own..." entry. */
+				function displayOptions(): Array<{ label: string; isCustom?: boolean }> {
+					const q = currentQuestion();
+					if (!q) return [];
+					const opts: Array<{ label: string; isCustom?: boolean }> = q.options.map((o) => ({ label: o }));
+					opts.push({ label: "Write your own answer...", isCustom: true });
+					return opts;
+				}
+
+				function allAnswered(): boolean {
+					return questions.every((q) => answers.has(q.id));
+				}
+
+				/** Restore UI state when entering a question tab. */
+				function enterQuestion(q: BrainstormQuestion) {
+					const existing = answers.get(q.id);
+					const draft = drafts.get(q.id);
+					if (q.options.length === 0) {
+						// No options — go straight to editor
+						inputMode = true;
+						inputQuestionId = q.id;
+						editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+					} else if (existing?.wasCustom) {
+						// Previously wrote custom answer — point cursor at "Write your own..."
+						optionIndex = q.options.length; // last item = custom entry
+					} else if (existing && !existing.wasCustom) {
+						// Restore option cursor to previously selected option
+						const idx = q.options.indexOf(existing.answer);
+						optionIndex = idx >= 0 ? idx : 0;
+					} else {
+						// Default to recommended option, or first
+						optionIndex = q.recommended ?? 0;
+					}
+				}
+
+				function advanceAfterAnswer() {
+					if (!isMulti) {
+						submit(false);
+						return;
+					}
+					if (currentTab < questions.length - 1) {
+						currentTab++;
+					} else {
+						currentTab = questions.length; // Submit tab
+					}
+					const nextQ = currentQuestion();
+					if (nextQ) enterQuestion(nextQ);
+					else optionIndex = 0;
+					refresh();
+				}
+
+				function saveAnswer(qId: string, value: string, wasCustom: boolean) {
+					const q = questions.find((qq) => qq.id === qId);
+					answers.set(qId, { id: qId, question: q?.question ?? qId, answer: value, wasCustom });
+				}
+
+				editor.onSubmit = (value) => {
+					if (!inputQuestionId) return;
+					const trimmed = value.trim();
+					if (!trimmed) {
+						// Reject empty submissions — keep editor open
+						refresh();
+						return;
+					}
+					drafts.delete(inputQuestionId); // clear draft on successful submit
+					saveAnswer(inputQuestionId, trimmed, true);
+					inputMode = false;
+					inputQuestionId = null;
+					editor.setText("");
+					advanceAfterAnswer();
+				};
+
+				/** Save current editor text as draft and exit input mode. */
+				function exitEditor() {
+					if (inputQuestionId) {
+						const text = editor.getText();
+						if (text.trim()) drafts.set(inputQuestionId, text);
+						else drafts.delete(inputQuestionId);
+					}
+					inputMode = false;
+					inputQuestionId = null;
+					editor.setText("");
+				}
+
+				// Initialize first question state
+				enterQuestion(questions[0]);
+
+				function handleInput(data: string) {
+					// Input mode: route to editor
+					if (inputMode) {
+						if (matchesKey(data, Key.escape)) {
+							const q = currentQuestion();
+							if (q && q.options.length === 0 && !isMulti) {
+								// Single question with no options — cancel entirely
+								submit(true);
+							} else {
+								// Exit editor, save draft for later
+								exitEditor();
+								refresh();
+							}
+							return;
+						}
+						// Allow tab navigation even while in input mode (multi-question only)
+						if (isMulti && (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab")))) {
+							exitEditor();
+							if (matchesKey(data, Key.tab)) {
+								currentTab = (currentTab + 1) % totalTabs;
+							} else {
+								currentTab = (currentTab - 1 + totalTabs) % totalTabs;
+							}
+							const nq = currentQuestion();
+							if (nq) enterQuestion(nq);
+							else optionIndex = 0;
+							refresh();
+							return;
+						}
+						editor.handleInput(data);
+						refresh();
+						return;
+					}
+
+					const q = currentQuestion();
+					const opts = displayOptions();
+
+					// Tab navigation (multi-question only)
+					if (isMulti) {
+						if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+							currentTab = (currentTab + 1) % totalTabs;
+							const nq = currentQuestion();
+							if (nq) enterQuestion(nq);
+							else optionIndex = 0;
+							refresh();
+							return;
+						}
+						if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
+							currentTab = (currentTab - 1 + totalTabs) % totalTabs;
+							const nq = currentQuestion();
+							if (nq) enterQuestion(nq);
+							else optionIndex = 0;
+							refresh();
+							return;
+						}
+					}
+
+					// Submit tab
+					if (currentTab === questions.length) {
+						if (matchesKey(data, Key.enter) && allAnswered()) {
+							submit(false);
+						} else if (matchesKey(data, Key.escape)) {
+							submit(true);
+						}
+						return;
+					}
+
+					// Option navigation
+					if (matchesKey(data, Key.up)) {
+						optionIndex = Math.max(0, optionIndex - 1);
+						refresh();
+						return;
+					}
+					if (matchesKey(data, Key.down)) {
+						optionIndex = Math.min(opts.length - 1, optionIndex + 1);
+						refresh();
+						return;
+					}
+
+					// Select option or enter editor for no-option questions
+					if (matchesKey(data, Key.enter) && q) {
+						if (q.options.length === 0 || opts[optionIndex]?.isCustom) {
+							// Enter editor — restore draft first, then saved answer
+							inputMode = true;
+							inputQuestionId = q.id;
+							const draft = drafts.get(q.id);
+							const existing = answers.get(q.id);
+							editor.setText(draft ?? (existing?.wasCustom ? existing.answer : ""));
+							refresh();
+							return;
+						}
+						const opt = opts[optionIndex];
+						saveAnswer(q.id, opt.label, false);
+						advanceAfterAnswer();
+						return;
+					}
+
+					// Cancel
+					if (matchesKey(data, Key.escape)) {
+						submit(true);
+					}
+				}
+
+				function render(width: number): string[] {
+					if (cachedLines) return cachedLines;
+
+					const lines: string[] = [];
+					const q = currentQuestion();
+					const opts = displayOptions();
+					const add = (s: string) => lines.push(truncateToWidth(s, width));
+
+					add(theme.fg("accent", "\u2500".repeat(width)));
+
+					// Tab bar (multi-question only)
+					if (isMulti) {
+						const tabs: string[] = ["\u2190 "];
+						for (let i = 0; i < questions.length; i++) {
+							const isActive = i === currentTab;
+							const isAnswered = answers.has(questions[i].id);
+							const lbl = questions[i].id;
+							const box = isAnswered ? "\u25A0" : "\u25A1";
+							const color = isAnswered ? "success" : "muted";
+							const text = ` ${box} ${lbl} `;
+							const styled = isActive ? theme.bg("selectedBg", theme.fg("text", text)) : theme.fg(color, text);
+							tabs.push(`${styled} `);
+						}
+						const canSubmit = allAnswered();
+						const isSubmitTab = currentTab === questions.length;
+						const submitText = " \u2713 Submit ";
+						const submitStyled = isSubmitTab
+							? theme.bg("selectedBg", theme.fg("text", submitText))
+							: theme.fg(canSubmit ? "success" : "dim", submitText);
+						tabs.push(`${submitStyled} \u2192`);
+						add(` ${tabs.join("")}`);
+						lines.push("");
+					}
+
+					// Render options list
+					function renderOptions() {
+						for (let i = 0; i < opts.length; i++) {
+							const opt = opts[i];
+							const selected = i === optionIndex;
+							const prefix = selected ? theme.fg("accent", "> ") : "  ";
+							const color = selected ? "accent" : "text";
+							const isRecommended = !opt.isCustom && q && q.recommended === i;
+							const recTag = isRecommended ? theme.fg("success", " \u2605") : "";
+							if (opt.isCustom && inputMode) {
+								add(prefix + theme.fg("accent", `${i + 1}. ${opt.label} \u270E`));
+							} else {
+								add(prefix + theme.fg(color, `${i + 1}. ${opt.label}`) + recTag);
+							}
+						}
+					}
+
+					// Content
+					if (inputMode && q) {
+						add(theme.fg("text", ` ${q.question}`));
+						if (q.context) {
+							add(theme.fg("muted", ` ${q.context}`));
+						}
+						lines.push("");
+						if (q.options.length > 0) {
+							renderOptions();
+							lines.push("");
+						}
+						add(theme.fg("muted", " Your answer:"));
+						for (const line of editor.render(width - 2)) {
+							add(` ${line}`);
+						}
+						lines.push("");
+						add(theme.fg("dim", " Enter to submit \u2022 Esc to cancel"));
+					} else if (currentTab === questions.length) {
+						// Submit tab
+						add(theme.fg("accent", theme.bold(" Ready to submit")));
+						lines.push("");
+						for (const question of questions) {
+							const answer = answers.get(question.id);
+							if (answer) {
+								const prefix = answer.wasCustom ? "(wrote) " : "";
+								add(`${theme.fg("muted", ` ${question.id}: `)}${theme.fg("text", prefix + answer.answer)}`);
+							} else {
+								add(`${theme.fg("muted", ` ${question.id}: `)}${theme.fg("warning", "(unanswered)")}`);
+							}
+						}
+						lines.push("");
+						if (allAnswered()) {
+							add(theme.fg("success", " Press Enter to submit"));
+						} else {
+							const missing = questions
+								.filter((qq) => !answers.has(qq.id))
+								.map((qq) => qq.id)
+								.join(", ");
+							add(theme.fg("warning", ` Unanswered: ${missing}`));
+						}
+					} else if (q) {
+						// Question view
+						add(theme.fg("text", ` ${q.question}`));
+						if (q.context) {
+							add(theme.fg("muted", ` ${q.context}`));
+						}
+						const existing = answers.get(q.id);
+						if (existing) {
+							const prefix = existing.wasCustom ? "(wrote) " : "";
+							add(theme.fg("dim", ` Current: ${prefix}${existing.answer}`));
+						}
+						lines.push("");
+						if (q.options.length > 0) {
+							renderOptions();
+						} else {
+							// No options — show prompt to enter editor
+							add(theme.fg("muted", " Press Enter to write your answer"));
+						}
+					}
+
+					lines.push("");
+					if (!inputMode) {
+						const help = isMulti
+							? " Tab/\u2190\u2192 navigate \u2022 \u2191\u2193 select \u2022 Enter confirm \u2022 Esc cancel"
+							: " \u2191\u2193 navigate \u2022 Enter select \u2022 Esc cancel";
+						add(theme.fg("dim", help));
+					}
+					add(theme.fg("accent", "\u2500".repeat(width)));
+
+					cachedLines = lines;
+					return lines;
+				}
+
+				return {
+					render,
+					invalidate: () => { cachedLines = undefined; },
+					handleInput,
+				};
+			});
+
+			if (result.cancelled) {
+				return {
+					content: [{ type: "text", text: "(brainstorm dismissed)" }],
+					details: result,
+				};
+			}
+
+			// Build Q&A records for conversation history
+			const records = result.answers.map((a) => {
+				const q = questions.find((qq) => qq.id === a.id);
+				const lines = [`**Q:** ${a.question}`];
+				if (q?.context) lines.push(`\n${q.context}`);
+				if (q && q.options.length > 0) lines.push(`\nOptions: ${q.options.join(" / ")}`);
+				lines.push(`\n**A:** ${a.answer}`);
+				return lines.filter(Boolean).join("");
+			});
 
 			return {
-				content: [{ type: "text", text: record }],
-				details: {},
+				content: [{ type: "text", text: records.join("\n\n---\n\n") }],
+				details: result,
 			};
+		},
+
+		renderCall(args, theme) {
+			const qs = (args.questions as Array<{ id: string; question: string }>) || [];
+			const count = qs.length;
+			const labels = qs.map((q) => q.id).join(", ");
+			let text = theme.fg("toolTitle", theme.bold("brainstorm "));
+			text += theme.fg("muted", `${count} question${count !== 1 ? "s" : ""}`);
+			if (labels) {
+				text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
+			}
+			return new Text(text, 0, 0);
+		},
+
+		renderResult(result, _options, theme) {
+			const details = result.details as BrainstormResult | undefined;
+			if (!details) {
+				const text = result.content[0];
+				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+			}
+			if (details.cancelled) {
+				return new Text(theme.fg("warning", "(dismissed)"), 0, 0);
+			}
+			const lines = details.answers.map((a) => {
+				const prefix = a.wasCustom ? "(wrote) " : "";
+				return `${theme.fg("success", "\u2713 ")}${theme.fg("accent", a.id)}: ${theme.fg("muted", prefix)}${a.answer}`;
+			});
+			return new Text(lines.join("\n"), 0, 0);
 		},
 	});
 
@@ -195,15 +625,75 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			}, { description: "Verification criteria defined upfront. Automated commands + manual acceptance checklist. Used by plan_verify at the end." })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			// Create plan folder in pending/
+			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+			const planContent = renderPlan(title, params.goal, params.steps, params.architecture, params.verification);
+
+			// Check if there's a focused draft plan we should update in-place
+			const draft = session.focusedPlan;
+			const isDraft = draft && fs.existsSync(planFile(draft)) && fs.readFileSync(planFile(draft), "utf-8").includes("<!-- DRAFT -->");
+
+			if (isDraft) {
+				const relPath = path.relative(ctx.cwd, draft);
+				const choice = await ctx.ui.select(`Plan ready: ${relPath}\nWhat next?`, [
+					"Start execution",
+					"Save for later",
+					"I have feedback",
+				]);
+
+				if (choice === "I have feedback") {
+					// Keep DRAFT marker so next plan_create still updates in-place
+					const feedback = await ctx.ui.input("What would you like to change?", "e.g. step 3 should come before step 2");
+					if (feedback) {
+						pi.sendMessage(
+							{ customType: "plan-feedback", content: `The user has feedback on the plan at ${draft}:\n\n${feedback}\n\nRead the plan, discuss with the user, and call plan_create again with the revised plan.`, display: true },
+							{ triggerTurn: true },
+						);
+						return {
+							content: [{ type: "text", text: `Draft kept at ${draft}\nDiscussing feedback with user.` }],
+							details: { planPath: draft },
+						};
+					}
+					return {
+						content: [{ type: "text", text: `Draft kept at ${draft}` }],
+						details: { planPath: draft },
+					};
+				}
+
+				// Finalize: overwrite draft with real plan content
+				fs.writeFileSync(planFile(draft), planContent, "utf-8");
+				appendLog(logFile(draft), "Plan created.");
+
+				if (choice === "Start execution") {
+					return {
+						content: [{ type: "text", text: `Plan finalized and ready: ${draft}\nCall plan_execute to begin execution with guidelines.` }],
+						details: { planPath: draft },
+					};
+				}
+
+				if (choice === "Save for later") {
+					const dest = parkActivePlan(ctx.cwd, draft);
+					session.focusedPlan = undefined;
+					return {
+						content: [{ type: "text", text: `Plan saved for later: ${dest}\nUse plan_activate or /activate-plan to activate it when ready.` }],
+						details: { planPath: dest },
+					};
+				}
+
+				// Dismissed
+				return {
+					content: [{ type: "text", text: `Plan finalized: ${draft}` }],
+					details: { planPath: draft },
+				};
+			}
+
+			// No draft — create a new plan folder in pending/
 			const dir = pendingDir(ctx.cwd);
 			ensureDir(dir);
 			const folderName = `${ts()}-${slugify(params.name)}`;
 			const planDir = safeDestPath(path.join(dir, folderName));
 			ensureDir(planDir);
 
-			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-			fs.writeFileSync(planFile(planDir), renderPlan(title, params.goal, params.steps, params.architecture, params.verification), "utf-8");
+			fs.writeFileSync(planFile(planDir), planContent, "utf-8");
 			fs.writeFileSync(logFile(planDir), renderLogHeader(), "utf-8");
 			appendLog(logFile(planDir), "Plan created.");
 
@@ -219,7 +709,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				const dest = safeDestPath(path.join(activeDir(ctx.cwd), path.basename(planDir)));
 				ensureDir(activeDir(ctx.cwd));
 				fs.renameSync(planDir, dest);
-				session.focusedPlan = dest; // Auto-focus this session on the new plan
+				session.focusedPlan = dest;
 				return {
 					content: [{ type: "text", text: `Plan created, activated, and focused: ${dest}\nCall plan_execute to begin execution with guidelines.` }],
 					details: { planPath: dest },
@@ -233,15 +723,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				};
 			}
 
-			// "I have feedback" or dismissed — ask for input
+			// "I have feedback" or dismissed
 			const feedback = await ctx.ui.input("What would you like to change?", "e.g. step 3 should come before step 2");
 			if (feedback) {
 				pi.sendMessage(
-					{
-						customType: "plan-feedback",
-						content: `The user has feedback on the plan at ${planDir}:\n\n${feedback}\n\nRead the plan, discuss with the user, and update or recreate it.`,
-						display: true,
-					},
+					{ customType: "plan-feedback", content: `The user has feedback on the plan at ${planDir}:\n\n${feedback}\n\nRead the plan, discuss with the user, and update or recreate it.`, display: true },
 					{ triggerTurn: true },
 				);
 				return {
@@ -312,11 +798,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"- Use `plan_update(add_step: ...)` if new work is discovered.",
 				"",
 				"### Finishing Up",
-				"When all steps are complete, call `plan_verify` (NOT `plan_finish` directly):",
-				"1. Run ALL automated checks (full test suite, build, lint)",
-				"2. Prepare an acceptance checklist for the user",
-				"3. Call `plan_verify` with results + checklist",
-				"4. Only call `plan_finish` after the user approves verification",
+				"When all steps are complete:",
+				"1. **Review** — call `plan_review` to start a code review round. Run an external reviewer, document findings and responses.",
+				"2. **Verify** — run ALL automated checks (full test suite, build, lint). Call `plan_verify` with results + checklist.",
+				"3. **Finish** — only call `plan_finish` after the user approves verification.",
 			].join("\n");
 
 			return {
@@ -411,6 +896,69 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			return {
 				content: [{ type: "text", text: `Logged to ${planPath}` }],
 				details: { planPath },
+			};
+		},
+	});
+
+	// -- plan_review ---------------------------------------------------------
+
+	pi.registerTool({
+		name: "plan_review",
+		label: "plan review",
+		description:
+			"Start a code review round. Creates a review document in the plan's reviews/ subfolder. " +
+			"Typically called after steps are complete, before plan_verify — but can be used mid-execution too. " +
+			"After calling this tool: run an external review (codex, gemini, etc.), write findings into the review doc, " +
+			"discuss with the user, make fixes, then write your responses into the Response section. " +
+			"Multiple rounds are supported — call again for each round.",
+		parameters: Type.Object({
+			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
+			const content = fs.readFileSync(planFile(planPath), "utf-8");
+			const titleMatch = content.match(/^# (.+)/m);
+			const planName = titleMatch?.[1] ?? path.basename(planPath);
+
+			// Determine round number from existing review files (parse max round from filenames)
+			const rvDir = planReviewDir(planPath);
+			ensureDir(rvDir);
+			const existing = fs.existsSync(rvDir) ? fs.readdirSync(rvDir).filter((f) => f.endsWith(".md")) : [];
+			let maxRound = 0;
+			for (const f of existing) {
+				const m = f.match(/round-(\d+)\.md$/);
+				if (m) maxRound = Math.max(maxRound, parseInt(m[1], 10));
+			}
+			const round = maxRound + 1;
+
+			// Create review document
+			const reviewFile = safeDestPath(path.join(rvDir, `${ts()}-round-${round}.md`));
+			fs.writeFileSync(reviewFile, renderReviewDoc(round, planName), "utf-8");
+
+			const relPath = path.relative(planPath, reviewFile);
+			appendLog(logFile(planPath), `Code review round ${round} started → ${relPath}`);
+
+			const relFromCwd = path.relative(ctx.cwd, reviewFile);
+			const guidance = [
+				`## Code Review — Round ${round}`,
+				"",
+				`**Review document created:** ${relFromCwd}`,
+				"",
+				"### Steps",
+				"",
+				"1. **Run external review** — pipe the relevant diff/files to an external reviewer (codex, gemini, or similar) via bash",
+				"2. **Record findings** — write the reviewer's output into the `## Findings` section of the review doc",
+				"3. **Discuss with user** — go through each finding, decide what to fix vs reject",
+				"4. **Make fixes** — implement accepted changes",
+				"5. **Record responses** — write your response to each finding in the `## Response` section (accepted/rejected with reasoning)",
+				"6. **Log outcome** — call `plan_log` with a summary of the review outcome",
+				"",
+				"If another round is needed, call `plan_review` again.",
+			].join("\n");
+
+			return {
+				content: [{ type: "text", text: guidance }],
+				details: { reviewFile, planPath, round },
 			};
 		},
 	});

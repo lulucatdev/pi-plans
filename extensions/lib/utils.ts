@@ -67,6 +67,10 @@ export function planResearchDir(planDir: string): string {
 	return path.join(planDir, "research");
 }
 
+export function planReviewDir(planDir: string): string {
+	return path.join(planDir, "reviews");
+}
+
 /** Extract slug from plan folder name: "20260323074203-auth-refactor" -> "auth-refactor" */
 export function extractSlugFromPlanPath(planPath: string): string {
 	const folderName = path.basename(planPath);

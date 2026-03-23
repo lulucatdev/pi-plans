@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderLogHeader, appendLog } from "../extensions/lib/format.js";
+import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -224,6 +224,23 @@ describe("renderResearchDoc", () => {
 	it("uses 'standalone' when no plan name", () => {
 		const result = renderResearchDoc("General topic");
 		expect(result).toContain("> Plan: standalone");
+	});
+});
+
+describe("renderReviewDoc", () => {
+	it("generates review doc with round and plan name", () => {
+		const result = renderReviewDoc(1, "Auth Refactor");
+		expect(result).toContain("# Code Review — Round 1");
+		expect(result).toContain("> Plan: Auth Refactor");
+		expect(result).toContain("## Changes Reviewed");
+		expect(result).toContain("## Findings");
+		expect(result).toContain("## Response");
+	});
+
+	it("uses 'unknown' when no plan name", () => {
+		const result = renderReviewDoc(3);
+		expect(result).toContain("# Code Review — Round 3");
+		expect(result).toContain("> Plan: unknown");
 	});
 });
 

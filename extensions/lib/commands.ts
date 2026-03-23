@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { plansDir, validatePlanPath } from "./utils.js";
-import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
+import { plansDir, planFile, validatePlanPath } from "./utils.js";
+import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan, createDraftPlan } from "./state.js";
 import type { SessionState } from "./types.js";
 
 export function registerCommands(pi: ExtensionAPI, session: SessionState): void {
@@ -25,7 +25,7 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			const prompt = [
 				"We are having a pure brainstorming session. No research phase, no plan creation — just a focused conversation to explore ideas.",
 				"",
-				"Use the `plan_brainstorm` tool for EVERY question. Do NOT use regular text messages to ask questions. One question at a time.",
+				"Use the `plan_brainstorm` tool for EVERY question. Do NOT use regular text messages to ask questions. Batch related questions into a single call — present 2-5 questions at once for a natural brainstorm flow. Always provide suggested options for each question.",
 				"",
 				"1. **Understand the idea** — ask about goals, context, constraints",
 				"2. **Explore angles** — trade-offs, alternatives, edge cases, implications",
@@ -58,7 +58,7 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				"",
 				"## Phase 2: Brainstorm",
 				"",
-				"Use the `plan_brainstorm` tool for EVERY question to the user. Do NOT use regular text messages to ask questions. One question at a time.",
+				"Use the `plan_brainstorm` tool for EVERY question to the user. Do NOT use regular text messages to ask questions. Batch related questions into a single call — present 2-5 questions at once for a natural brainstorm flow. Always provide suggested options for each question.",
 				"",
 				"1. **Explore the idea** — ask about goals, motivations, constraints. Prefer multiple-choice options when possible.",
 				"2. **Investigate angles** — dig into trade-offs, alternatives, implications.",
@@ -84,8 +84,17 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 		description: "Start a planning session: research, brainstorm, and create a tracked plan",
 		handler: async (args, ctx) => {
 			const topic = args?.trim() || "";
+			// Reuse existing focused draft if available, otherwise create new
+			let draftPath = session.focusedPlan;
+			const hasDraft = draftPath && fs.existsSync(planFile(draftPath)) && fs.readFileSync(planFile(draftPath), "utf-8").includes("<!-- DRAFT -->");
+			if (!hasDraft) {
+				draftPath = createDraftPlan(ctx.cwd, topic, session);
+			}
 			const prompt = [
 				"We are starting a planning session. Follow this pipeline in order:",
+				"",
+				`A draft plan folder has been created and focused: ${draftPath}`,
+				"All research will be saved inside this plan folder.",
 				"",
 				"## Phase 1: Research",
 				"",
@@ -95,9 +104,9 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				"",
 				"## Phase 2: Brainstorm",
 				"",
-				"Use the `plan_brainstorm` tool for EVERY question to the user. Do NOT use regular text messages to ask questions. One question at a time.",
+				"Use the `plan_brainstorm` tool for EVERY question to the user. Do NOT use regular text messages to ask questions. Batch related questions into a single call — present 2-5 questions at once for a natural brainstorm flow. Always provide suggested options for each question.",
 				"",
-				"1. **Clarify scope** — ask about ambiguities, constraints, priorities. Prefer multiple-choice options.",
+				"1. **Clarify and explore** — batch questions about scope, constraints, ambiguities, and approach preferences. Provide multiple-choice options with context for trade-offs.",
 				"2. **Propose approaches** — present 2-3 approaches with trade-offs using `plan_brainstorm`. Put detailed explanations in the `context` parameter.",
 				"3. **Refine** — ask follow-up questions based on the chosen approach.",
 				"4. **Define verification** — ask what automated checks to run (build, test, lint commands) and what the user wants to manually verify. These become the plan's acceptance criteria.",

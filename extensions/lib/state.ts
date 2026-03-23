@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath } from "./utils.js";
-import { parseSteps, appendLog } from "./format.js";
+import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath, ts, slugify } from "./utils.js";
+import { parseSteps, appendLog, renderDraftPlan, renderLogHeader } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
 /** Shared mutable session state. */
@@ -35,14 +35,15 @@ export function getActivePlan(cwd: string): string | undefined {
 	return plans.length === 1 ? plans[0] : undefined;
 }
 
-/** Move a specific active plan folder to pending/. Validates the plan is in active/. */
-export function parkActivePlan(cwd: string, planPath: string) {
+/** Move a specific active plan folder to pending/. Validates the plan is in active/. Returns dest path. */
+export function parkActivePlan(cwd: string, planPath: string): string {
 	const parentDir = path.basename(path.dirname(planPath));
 	if (parentDir !== "active") throw new Error(`Can only deactivate plans in active/, not ${parentDir}/: ${planPath}`);
 	appendLog(logFile(planPath), "Plan deactivated.");
 	const dest = safeDestPath(path.join(pendingDir(cwd), path.basename(planPath)));
 	ensureDir(pendingDir(cwd));
 	fs.renameSync(planPath, dest);
+	return dest;
 }
 
 export function resolvePlanArg(planPath: string | undefined, cwd: string, focused?: string): string {
@@ -97,6 +98,22 @@ export function planSummary(planPath: string): string {
 	const current = steps.find((s) => s.isCurrent);
 	const currentText = current ? ` → ${current.text}` : "";
 	return `[${status}] ${done}/${total} ${title}${currentText}`;
+}
+
+/** Create a draft plan folder in active/, with minimal plan.md + log.md. Returns the plan path. */
+export function createDraftPlan(cwd: string, topic: string, session: SessionState): string {
+	const slug = slugify(topic || "plan");
+	const folderName = `${ts()}-${slug}`;
+	const dir = activeDir(cwd);
+	ensureDir(dir);
+	const planDir = safeDestPath(path.join(dir, folderName));
+	ensureDir(planDir);
+	const title = (topic || "Plan").replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+	fs.writeFileSync(planFile(planDir), renderDraftPlan(title), "utf-8");
+	fs.writeFileSync(logFile(planDir), renderLogHeader(), "utf-8");
+	appendLog(logFile(planDir), "Draft plan created.");
+	session.focusedPlan = planDir;
+	return planDir;
 }
 
 // -- Shared lifecycle transitions -------------------------------------------

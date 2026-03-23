@@ -35,6 +35,7 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
 | `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |
 | `plan_log` | Add a log entry to the plan's `log.md`. |
+| `plan_review` | Start a code review round. Creates review doc in `reviews/`. Run external reviewer, document findings and responses. |
 | `plan_verify` | Acceptance phase: present your automated test results + manual checklist to user for approval. |
 | `plan_finish` | Mark plan completed, move to `done/`. Requires all steps done + verification passed. |
 | `plan_abort` | Abort plan with reason, move to `aborted/`. |
@@ -68,7 +69,12 @@ pi install git:github.com/lulucatdev/pi-plans
   → plan_research(topic)                  ← research doc inside plan folder
   ...all steps done...
 
-  Phase 5: Verify
+  Phase 5: Review
+  → plan_review()                         ← creates review doc
+  agent runs external reviewer (codex/gemini)
+  agent writes findings + responses into review doc
+
+  Phase 6: Verify
   → plan_verify(automated_results)        ← user acceptance
   → plan_finish()                         ← moved to done/
 ```
@@ -83,9 +89,11 @@ Plans live under `<project>/.pi/plans/` in subdirectories that represent their s
 │   └── 20260323074203-auth-refactor/
 │       ├── plan.md                            ← goal, architecture, steps, verification
 │       ├── log.md                             ← append-only operation log
-│       └── research/
-│           ├── 20260323074510-oauth-flows.md
-│           └── 20260323075200-jwt-comparison.md
+│       ├── research/
+│       │   ├── 20260323074510-oauth-flows.md
+│       │   └── 20260323075200-jwt-comparison.md
+│       └── reviews/
+│           └── 20260323100000-round-1.md      ← code review findings + responses
 ├── pending/                                   ← plans saved for later
 ├── done/                                      ← completed plans
 ├── aborted/                                   ← aborted plans

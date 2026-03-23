@@ -164,6 +164,37 @@ export function renderResearchDoc(topic: string, planName?: string): string {
 	return lines.join("\n");
 }
 
+/** Render a minimal draft plan.md. Used when /start-plan creates a placeholder before brainstorming. */
+export function renderDraftPlan(title: string): string {
+	const lines: string[] = [];
+	lines.push(`# ${title}`);
+	lines.push("");
+	lines.push(`> Created: ${logTs()}`);
+	lines.push("");
+	lines.push("<!-- DRAFT -->");
+	lines.push("");
+	return lines.join("\n");
+}
+
+export function renderReviewDoc(round: number, planName?: string): string {
+	const lines: string[] = [];
+	lines.push(`# Code Review — Round ${round}`);
+	lines.push("");
+	lines.push(`> Date: ${logTs()}`);
+	lines.push(`> Plan: ${planName ?? "unknown"}`);
+	lines.push("");
+	lines.push("## Changes Reviewed");
+	lines.push("");
+	lines.push("");
+	lines.push("## Findings");
+	lines.push("");
+	lines.push("");
+	lines.push("## Response");
+	lines.push("");
+	lines.push("");
+	return lines.join("\n");
+}
+
 /** Return initial content for a new log.md file. */
 export function renderLogHeader(): string {
 	return `# Plan Log\n\n> Append-only operation log\n`;
