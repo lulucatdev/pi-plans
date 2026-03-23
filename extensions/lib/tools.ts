@@ -157,8 +157,16 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				answer = await ctx.ui.input(title, "Type your answer...");
 			}
 
+			// Return full Q&A record so it remains visible in conversation history
+			const record = [
+				`**Q:** ${params.question}`,
+				params.context ? `\n${params.context}` : "",
+				params.options?.length ? `\nOptions: ${params.options.join(" / ")}` : "",
+				`\n**A:** ${answer ?? "(dismissed)"}`,
+			].filter(Boolean).join("");
+
 			return {
-				content: [{ type: "text", text: answer ?? "dismissed" }],
+				content: [{ type: "text", text: record }],
 				details: {},
 			};
 		},
