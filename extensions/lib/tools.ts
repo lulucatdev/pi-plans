@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planReviewDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
 import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
@@ -418,6 +418,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 					const q = currentQuestion();
 					const opts = displayOptions();
 					const add = (s: string) => lines.push(truncateToWidth(s, width));
+				const addWrapped = (s: string) => lines.push(...wrapTextWithAnsi(s, width));
 
 					add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -464,9 +465,9 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 					// Content
 					if (inputMode && q) {
-						add(theme.fg("text", ` ${q.question}`));
+						addWrapped(theme.fg("text", ` ${q.question}`));
 						if (q.context) {
-							add(theme.fg("muted", ` ${q.context}`));
+							addWrapped(theme.fg("muted", ` ${q.context}`));
 						}
 						lines.push("");
 						if (q.options.length > 0) {
@@ -504,9 +505,9 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 						}
 					} else if (q) {
 						// Question view
-						add(theme.fg("text", ` ${q.question}`));
+						addWrapped(theme.fg("text", ` ${q.question}`));
 						if (q.context) {
-							add(theme.fg("muted", ` ${q.context}`));
+							addWrapped(theme.fg("muted", ` ${q.context}`));
 						}
 						const existing = answers.get(q.id);
 						if (existing) {
