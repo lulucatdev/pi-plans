@@ -176,6 +176,11 @@ export function renderDraftPlan(title: string): string {
 	return lines.join("\n");
 }
 
+export function markAsDraft(content: string): string {
+	const withoutMarker = content.replace(/\n*<!-- DRAFT -->\s*$/, "").trimEnd();
+	return `${withoutMarker}\n\n<!-- DRAFT -->\n`;
+}
+
 export function renderReviewDoc(round: number, planName?: string): string {
 	const lines: string[] = [];
 	lines.push(`# Code Review — Round ${round}`);

@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planReviewDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
-import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog } from "./format.js";
+import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog, markAsDraft } from "./format.js";
 import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
 
@@ -635,7 +635,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			if (isDraft) {
 				const relPath = path.relative(ctx.cwd, draft);
-				const choice = await ctx.ui.select(`Plan ready: ${relPath}\nWhat next?`, [
+				// Persist the generated draft so user feedback can inspect a real plan file.
+				fs.writeFileSync(planFile(draft), markAsDraft(planContent), "utf-8");
+				appendLog(logFile(draft), "Draft plan updated.");
+
+				const choice = await ctx.ui.select(`Plan draft updated: ${relPath}\nWhat next?`, [
 					"Start execution",
 					"Save for later",
 					"I have feedback",
@@ -650,12 +654,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 							{ triggerTurn: true },
 						);
 						return {
-							content: [{ type: "text", text: `Draft kept at ${draft}\nDiscussing feedback with user.` }],
+							content: [{ type: "text", text: `Draft updated at ${draft}\nDiscussing feedback with user.` }],
 							details: { planPath: draft },
 						};
 					}
 					return {
-						content: [{ type: "text", text: `Draft kept at ${draft}` }],
+						content: [{ type: "text", text: `Draft updated at ${draft}` }],
 						details: { planPath: draft },
 					};
 				}

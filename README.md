@@ -31,7 +31,7 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_focus` | Bind this session to a specific plan folder. Subsequent tool calls default to it. |
 | `plan_research` | Create a research document inside the plan's `research/` subfolder. Write findings with the write tool. |
 | `plan_brainstorm` | Ask the user a question via UI dialog (select or free-text). Used for all interaction before `plan_create`. |
-| `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Prompts: start now, save for later, or feedback. |
+| `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Draft rewrites are persisted before final confirmation. Prompts: start now, save for later, or feedback. |
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
 | `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |
 | `plan_log` | Add a log entry to the plan's `log.md`. |
@@ -55,7 +55,8 @@ pi install git:github.com/lulucatdev/pi-plans
   Phase 2: Brainstorm
   → plan_brainstorm(question, options)    ← clarifying questions via UI dialogs
   → plan_brainstorm(question, context)    ← propose 2-3 approaches
-  → plan_brainstorm(question, options)    ← confirm design
+  agent posts full draft plan in chat     ← detailed title, goal, steps, verification
+  → plan_brainstorm(question, options)    ← approve or revise the draft
 
   Phase 3: Create
   → plan_create(name, goal, steps)        ← plan folder created in pending/

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog } from "../extensions/lib/format.js";
+import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog, markAsDraft } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -209,6 +209,18 @@ describe("renderPlan", () => {
 	it("omits verification section when empty", () => {
 		const result = renderPlan("T", "G", ["S"]);
 		expect(result).not.toContain("## Verification");
+	});
+});
+
+describe("markAsDraft", () => {
+	it("appends a draft marker to rendered plan content", () => {
+		const result = markAsDraft("# Test\n\nBody\n");
+		expect(result).toBe("# Test\n\nBody\n\n<!-- DRAFT -->\n");
+	});
+
+	it("does not duplicate an existing draft marker", () => {
+		const result = markAsDraft("# Test\n\nBody\n\n<!-- DRAFT -->\n\n");
+		expect(result).toBe("# Test\n\nBody\n\n<!-- DRAFT -->\n");
 	});
 });
 
