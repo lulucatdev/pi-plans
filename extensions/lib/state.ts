@@ -100,11 +100,11 @@ export function planSummary(planPath: string): string {
 	return `[${status}] ${done}/${total} ${title}${currentText}`;
 }
 
-/** Create a draft plan folder in active/, with minimal plan.md + log.md. Returns the plan path. */
+/** Create a draft plan folder in pending/, with minimal plan.md + log.md. Returns the plan path. */
 export function createDraftPlan(cwd: string, topic: string, session: SessionState): string {
 	const slug = slugify(topic || "plan");
 	const folderName = `${ts()}-${slug}`;
-	const dir = activeDir(cwd);
+	const dir = pendingDir(cwd);
 	ensureDir(dir);
 	const planDir = safeDestPath(path.join(dir, folderName));
 	ensureDir(planDir);

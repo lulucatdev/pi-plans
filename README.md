@@ -2,7 +2,7 @@
 
 A text-based project manager for [pi](https://github.com/mariozechner/pi). Plans are folder-based living documents with steps, append-only logs, and integrated research.
 
-Plans are opt-in. Nothing is injected into the system prompt until you explicitly start and activate a plan. Once active, the agent is prompted to track progress using plan tools as it works.
+Plans are opt-in. Nothing is injected into the system prompt until you explicitly activate a plan. Draft plans created during `/start-plan` stay pending until you approve them, and unrelated one-shot work should proceed without plan tools.
 
 ## Installation
 
@@ -29,8 +29,8 @@ pi install git:github.com/lulucatdev/pi-plans
 | Tool | Description |
 |------|-------------|
 | `plan_focus` | Bind this session to a specific plan folder. Subsequent tool calls default to it. |
-| `plan_research` | Create a research document inside the plan's `research/` subfolder. Write findings with the write tool. |
-| `plan_brainstorm` | Ask the user a question via UI dialog (select or free-text). Used for all interaction before `plan_create`. |
+| `plan_research` | Create a research document for non-trivial investigation. Skip it for simple answers or small one-shot edits. |
+| `plan_brainstorm` | Ask planning questions via UI dialog after the user has entered a planning or brainstorming flow. |
 | `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Draft rewrites are persisted before final confirmation. Prompts: start now, save for later, or feedback. |
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
 | `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |

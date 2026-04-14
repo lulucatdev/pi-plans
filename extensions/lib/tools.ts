@@ -65,9 +65,9 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_research",
 		label: "plan research",
 		description:
-			"Start researching a topic. Creates a persistent research document — write your findings there as you go. " +
-			"Use this proactively whenever you need to understand something better: before brainstorming, during planning, or mid-execution. " +
-			"Don't hesitate to call this multiple times for different topics. " +
+			"Start researching a topic and save findings in a persistent research document. " +
+			"Use this only when the task is non-trivial and genuinely needs investigation before you can proceed. " +
+			"For simple questions, direct answers, or small one-shot edits, do not open a research document. " +
 			"When linked to a plan, files go in the plan's research/ subfolder; otherwise .pi/plans/research/_standalone/.",
 		parameters: Type.Object({
 			topic: Type.String({ description: "What you need to research, e.g. 'OAuth 2.0 PKCE flow best practices'" }),
@@ -83,11 +83,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				planPath = abs;
 			} else {
 				const candidate = session.focusedPlan ?? getActivePlan(ctx.cwd);
-				if (candidate) {
-					const activePlans = getActivePlans(ctx.cwd);
-					if (activePlans.some((a) => path.resolve(a) === path.resolve(candidate))) {
-						planPath = candidate;
-					}
+				if (candidate && fs.existsSync(planFile(candidate))) {
+					planPath = candidate;
 				}
 			}
 
@@ -120,9 +117,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"",
 				`**Research document created:** ${relPath}`,
 				"",
-				"Investigate this topic thoroughly. Be resourceful — use whatever approach gets you the best understanding fastest. Write your findings into this file as you go.",
+				"Investigate this topic thoroughly and write only the findings that materially affect the task.",
 				"",
-				"**Good research is proactive:** follow threads that look promising, check related areas you weren't asked about, and surface insights the user might not have considered. If your investigation raises new questions, call `plan_research` again to open a new doc for each distinct topic.",
+				"Use this tool for non-trivial investigation. If the issue turns out to be straightforward, stop here and continue directly instead of expanding the research scope.",
+				"If your investigation raises a distinct follow-up topic that is still substantial, call `plan_research` again for that separate topic.",
 				"",
 				"### If Debugging a Problem",
 				"",
@@ -145,8 +143,9 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_brainstorm",
 		label: "plan brainstorm",
 		description:
-			"Ask the user one or more brainstorming questions via a UI questionnaire. " +
-			"Use for ALL user interactions before plan_create. " +
+			"Ask the user one or more planning questions via a UI questionnaire. " +
+			"Use this only after the user has chosen a brainstorming or planning flow, or explicitly asked to compare approaches before `plan_create`. " +
+			"Do not use it for ordinary chat, simple direct questions, or one-shot edits. " +
 			"Each question can have suggested options, but always includes free-text input. " +
 			"Use `recommended` to mark the best option (shown with ★, cursor defaults to it). " +
 			"Batch related questions into one call. Returns Q&A records.",
@@ -785,8 +784,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"- Never say 'should work' or 'probably passes' — run it and see",
 				"",
 				"### Research During Execution",
-				"When you hit something unfamiliar or uncertain, don't guess — research it.",
-				"Call `plan_research(topic)` to create a research doc and investigate properly. Good engineers research proactively, not just when stuck.",
+				"When a step depends on unfamiliar or uncertain information, do not guess.",
+				"Call `plan_research(topic)` only for substantial investigation. Skip it for straightforward steps that you can verify directly.",
 				"",
 				"### When Something Breaks — Systematic Debugging",
 				"If you hit an error or unexpected behavior, do NOT guess-and-fix. Follow this sequence:",

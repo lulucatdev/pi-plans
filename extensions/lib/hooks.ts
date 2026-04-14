@@ -40,12 +40,13 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 			systemPrompt: event.systemPrompt +
 				"\n\n## Active Plans\n\n" +
 				`${plansList}\n` +
-				"Read the plan at the start of your work. Use `plan_execute` to begin with full execution guidelines, or work through steps directly:\n" +
+				"Only use plan tracking when the current user request is actually part of one of these active plans. For unrelated one-shot work, continue normally and do not force plan tools.\n" +
+				"If the request belongs to an active plan, read the plan before editing files. Use `plan_execute` to begin with full execution guidelines, or work through steps directly:\n" +
 				"- `plan_update(complete_step: N)` when you finish a step.\n" +
 				"- `plan_update(log: \"...\")` to record decisions, progress, or blockers.\n" +
 				"- `plan_update(add_step: \"...\")` if new work is discovered.\n" +
 				"- `plan_review` for external code review. `plan_verify` for user acceptance. `plan_finish` after verification. `plan_abort` if the plan is no longer viable.\n" +
-				"\n**Research during execution:** Call `plan_research(topic)` whenever you need to investigate something. Be resourceful and proactive.\n" +
+				"\n**Research during execution:** Call `plan_research(topic)` only when the active plan requires non-trivial investigation. Skip it for straightforward edits or direct answers.\n" +
 				"**Pivot policy:** Execute faithfully by default. If you find a must-fix issue, discuss with the user before changing course.\n",
 		};
 	});
