@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog, markAsDraft } from "../extensions/lib/format.js";
+import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog, markAsDraft, clearVerificationMarkers, hasPreparedVerification, hasVerified, markVerificationPrepared, markVerified } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -221,6 +221,28 @@ describe("markAsDraft", () => {
 	it("does not duplicate an existing draft marker", () => {
 		const result = markAsDraft("# Test\n\nBody\n\n<!-- DRAFT -->\n\n");
 		expect(result).toBe("# Test\n\nBody\n\n<!-- DRAFT -->\n");
+	});
+});
+
+describe("verification markers", () => {
+	it("marks a plan as ready for manual verification", () => {
+		const result = markVerificationPrepared("# Test\n");
+		expect(hasPreparedVerification(result)).toBe(true);
+		expect(hasVerified(result)).toBe(false);
+	});
+
+	it("marks a prepared plan as verified", () => {
+		const prepared = markVerificationPrepared("# Test\n");
+		const verified = markVerified(prepared);
+		expect(hasPreparedVerification(verified)).toBe(false);
+		expect(hasVerified(verified)).toBe(true);
+	});
+
+	it("clears both verification markers", () => {
+		const content = "# Test\n\n<!-- VERIFICATION_READY -->\n\n<!-- VERIFIED -->\n";
+		const cleared = clearVerificationMarkers(content);
+		expect(hasPreparedVerification(cleared)).toBe(false);
+		expect(hasVerified(cleared)).toBe(false);
 	});
 });
 

@@ -31,12 +31,13 @@ pi install git:github.com/lulucatdev/pi-plans
 | `plan_focus` | Bind this session to a specific plan folder. Subsequent tool calls default to it. |
 | `plan_research` | Create a research document for non-trivial investigation. Skip it for simple answers or small one-shot edits. |
 | `plan_brainstorm` | Ask planning questions via UI dialog after the user has entered a planning or brainstorming flow. |
-| `plan_create` | Create a new plan folder with `plan.md` + `log.md`. Draft rewrites are persisted before final confirmation. Prompts: start now, save for later, or feedback. |
+| `plan_create` | Create a new plan folder with `plan.md` + `log.md`. It activates immediately by default; set `activate: false` to leave it in `pending/`. |
 | `plan_execute` | Begin execution with guidelines (verification, debugging, research, pivot policy). |
 | `plan_update` | Mark steps complete, add steps. Auto-logs changes to `log.md`. Optional explicit log entry. |
 | `plan_log` | Add a log entry to the plan's `log.md`. |
 | `plan_review` | Start a code review round. Creates review doc in `reviews/`. Run external reviewer, document findings and responses. |
-| `plan_verify` | Acceptance phase: present your automated test results + manual checklist to user for approval. |
+| `plan_prepare_to_verify` | Present automated results and the manual acceptance checklist, then hand manual verification to the user. |
+| `plan_verify` | Record the user's manual verification outcome after `plan_prepare_to_verify`. |
 | `plan_finish` | Mark plan completed, move to `done/`. Requires all steps done + verification passed. |
 | `plan_abort` | Abort plan with reason, move to `aborted/`. |
 | `plan_resume` | Resume a plan from `pending/`, `done/`, or `aborted/` to `active/`. |
@@ -59,8 +60,7 @@ pi install git:github.com/lulucatdev/pi-plans
   → plan_brainstorm(question, options)    ← approve or revise the draft
 
   Phase 3: Create
-  → plan_create(name, goal, steps)        ← plan folder created in pending/
-  user picks "Start now"                  ← moved to active/
+  → plan_create(name, goal, steps)        ← plan folder created in active/ by default
 
   Phase 4: Execute
   → plan_execute()                        ← returns plan + execution guidelines
@@ -76,7 +76,8 @@ pi install git:github.com/lulucatdev/pi-plans
   agent writes findings + responses into review doc
 
   Phase 6: Verify
-  → plan_verify(automated_results)        ← user acceptance
+  → plan_prepare_to_verify(automated_results) ← user performs manual checks
+  → plan_verify(status, feedback?)        ← record user acceptance or requested fixes
   → plan_finish()                         ← moved to done/
 ```
 

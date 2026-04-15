@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath, ts, slugify } from "./utils.js";
-import { parseSteps, appendLog, renderDraftPlan, renderLogHeader } from "./format.js";
+import { parseSteps, appendLog, renderDraftPlan, renderLogHeader, clearVerificationMarkers, hasVerified } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
 /** Shared mutable session state. */
@@ -126,8 +126,8 @@ export function finishPlan(planPath: string, cwd: string, session: SessionState,
 	if (incomplete.length > 0) {
 		throw new Error(`Cannot finish: ${incomplete.length} step(s) still incomplete. Complete all steps or use plan_abort.`);
 	}
-	if (!content.includes("<!-- VERIFIED -->")) {
-		throw new Error("Cannot finish: no verification record found. Run plan_verify first, or use plan_abort to skip.");
+	if (!hasVerified(content)) {
+		throw new Error("Cannot finish: no verification record found. Run plan_prepare_to_verify and plan_verify first, or use plan_abort to skip.");
 	}
 	appendLog(logFile(planPath), summary ? `Plan completed. ${summary}` : "Plan completed.");
 	const dest = safeDestPath(path.join(doneDir(cwd), path.basename(planPath)));
@@ -157,7 +157,7 @@ export function resumePlan(planPath: string, cwd: string, reason?: string): stri
 		throw new Error(`Can only resume plans from pending/, done/, or aborted/, not ${parentDir}/`);
 	}
 	let content = fs.readFileSync(planFile(planPath), "utf-8");
-	content = content.replaceAll("<!-- VERIFIED -->", "");
+	content = clearVerificationMarkers(content);
 	fs.writeFileSync(planFile(planPath), content, "utf-8");
 	appendLog(logFile(planPath), reason ? `Plan resumed. ${reason}` : "Plan resumed.");
 	const dest = safeDestPath(path.join(activeDir(cwd), path.basename(planPath)));

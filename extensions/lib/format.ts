@@ -2,6 +2,9 @@ import fs from "node:fs";
 import { logTs } from "./utils.js";
 import type { Step, Verification } from "./types.js";
 
+export const VERIFIED_MARKER = "<!-- VERIFIED -->";
+export const VERIFICATION_READY_MARKER = "<!-- VERIFICATION_READY -->";
+
 export function renderPlan(title: string, goal: string, steps: string[], architecture?: string, verification?: Verification): string {
 	const lines: string[] = [];
 	lines.push(`# ${title}`);
@@ -179,6 +182,30 @@ export function renderDraftPlan(title: string): string {
 export function markAsDraft(content: string): string {
 	const withoutMarker = content.replace(/\n*<!-- DRAFT -->\s*$/, "").trimEnd();
 	return `${withoutMarker}\n\n<!-- DRAFT -->\n`;
+}
+
+export function hasVerified(content: string): boolean {
+	return content.includes(VERIFIED_MARKER);
+}
+
+export function hasPreparedVerification(content: string): boolean {
+	return content.includes(VERIFICATION_READY_MARKER);
+}
+
+export function clearVerificationMarkers(content: string): string {
+	return content
+		.replaceAll(VERIFIED_MARKER, "")
+		.replaceAll(VERIFICATION_READY_MARKER, "");
+}
+
+export function markVerificationPrepared(content: string): string {
+	const cleared = clearVerificationMarkers(content).trimEnd();
+	return `${cleared}\n\n${VERIFICATION_READY_MARKER}\n`;
+}
+
+export function markVerified(content: string): string {
+	const cleared = clearVerificationMarkers(content).trimEnd();
+	return `${cleared}\n\n${VERIFIED_MARKER}\n`;
 }
 
 export function renderReviewDoc(round: number, planName?: string): string {
