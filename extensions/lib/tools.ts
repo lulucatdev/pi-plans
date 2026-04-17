@@ -30,6 +30,32 @@ interface BrainstormResult {
 	cancelled: boolean;
 }
 
+interface InlinePlanResultDetails {
+	planPath?: string;
+	renderSummary?: string;
+}
+
+function compactInlineText(text: string, maxLength = 100): string {
+	const compact = text.replace(/\s+/g, " ").trim();
+	if (compact.length <= maxLength) return compact;
+	return `${compact.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
+}
+
+function renderInlinePlanResult(result: { content: Array<{ type: string; text?: string }>; details?: unknown }, theme: any): Text {
+	const details = result.details as InlinePlanResultDetails | undefined;
+	const fallback = result.content[0];
+	if (!details?.renderSummary) {
+		return new Text(fallback?.type === "text" ? fallback.text ?? "" : "", 0, 0);
+	}
+
+	const slug = details.planPath ? extractSlugFromPlanPath(details.planPath) : undefined;
+	let line = `${theme.fg("success", "\u2713 ")}${compactInlineText(details.renderSummary)}`;
+	if (slug) {
+		line += theme.fg("dim", ` (${slug})`);
+	}
+	return new Text(line, 0, 0);
+}
+
 export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 	// -- plan_focus ----------------------------------------------------------
 
@@ -810,13 +836,11 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			if (params.complete_step !== undefined) {
 				content = completeStep(content, params.complete_step - 1);
-				actions.push(`completed step ${params.complete_step}`);
 			}
 
 			if (params.add_step) {
 				const afterIdx = params.after_step !== undefined ? params.after_step - 1 : undefined;
 				content = addStep(content, params.add_step, afterIdx);
-				actions.push(`added step "${params.add_step}"`);
 			}
 
 			// Invalidate verification when steps change (not on log-only updates)
@@ -831,20 +855,26 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				const steps = parseSteps(content);
 				const step = steps.find((s) => s.index === params.complete_step! - 1);
 				appendLog(logFile(planPath), `Completed step ${params.complete_step}${step ? `: ${step.text}` : ""}`);
+				actions.push(`completed step ${params.complete_step}${step ? `: ${step.text}` : ""}`);
 			}
 			if (params.add_step) {
 				appendLog(logFile(planPath), `Added step: ${params.add_step}`);
+				actions.push(`added step: ${params.add_step}`);
 			}
 
 			if (params.log) {
 				appendLog(logFile(planPath), params.log);
-				actions.push("added log entry");
+				actions.push(`log: ${params.log}`);
 			}
 
 			return {
 				content: [{ type: "text", text: `Updated plan: ${actions.join(", ")}\n${planPath}` }],
-				details: { planPath },
+				details: { planPath, renderSummary: actions.join("; ") },
 			};
+		},
+
+		renderResult(result, _options, theme) {
+			return renderInlinePlanResult(result, theme);
 		},
 	});
 
@@ -863,8 +893,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			appendLog(logFile(planPath), params.message);
 			return {
 				content: [{ type: "text", text: `Logged to ${planPath}` }],
-				details: { planPath },
+				details: { planPath, renderSummary: `log: ${params.message}` },
 			};
+		},
+
+		renderResult(result, _options, theme) {
+			return renderInlinePlanResult(result, theme);
 		},
 	});
 
@@ -1058,16 +1092,29 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan finish",
 		description:
 			"Mark the active plan as completed. Logs a completion entry and moves it to done/. " +
-			"You should call plan_prepare_to_verify and plan_verify BEFORE this to run the acceptance phase.",
+			"You should call plan_prepare_to_verify and plan_verify BEFORE this to run the acceptance phase. " +
+			"Provide a detailed completion summary so the final result and log clearly describe what was delivered.",
 		parameters: Type.Object({
-			summary: Type.Optional(Type.String({ description: "Brief completion summary to log" })),
+			summary: Type.Optional(Type.String({ description: "Detailed completion summary to log and show in the final result" })),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
 			const dest = finishPlan(planPath, ctx.cwd, session, params.summary);
+			const summary = params.summary?.trim();
+			const title = extractSlugFromPlanPath(dest);
 			return {
-				content: [{ type: "text", text: `Plan completed: ${dest}` }],
+				content: [{
+					type: "text",
+					text: [
+						`Plan completed: ${title}`,
+						summary ? "" : "No completion summary was provided.",
+						summary ? "Summary:" : "",
+						summary ?? "",
+						"",
+						`Archived at: ${dest}`,
+					].filter(Boolean).join("\n"),
+				}],
 				details: { planPath: dest },
 			};
 		},
@@ -1089,8 +1136,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			const dest = abortPlan(planPath, ctx.cwd, session, params.reason);
 			return {
 				content: [{ type: "text", text: `Plan aborted: ${dest}` }],
-				details: { planPath: dest },
+				details: { planPath: dest, renderSummary: params.reason ? `aborted: ${params.reason}` : "aborted" },
 			};
+		},
+
+		renderResult(result, _options, theme) {
+			return renderInlinePlanResult(result, theme);
 		},
 	});
 
@@ -1112,8 +1163,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			const summary = planSummary(dest);
 			return {
 				content: [{ type: "text", text: `Resumed and activated: ${summary}\n${dest}` }],
-				details: { planPath: dest },
+				details: { planPath: dest, renderSummary: `resumed and activated: ${summary}` },
 			};
+		},
+
+		renderResult(result, _options, theme) {
+			return renderInlinePlanResult(result, theme);
 		},
 	});
 
@@ -1154,7 +1209,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			// Special case: already active — return info instead of error
 			if (path.basename(path.dirname(abs)) === "active" && fs.existsSync(abs)) {
 				const summary = planSummary(abs);
-				return { content: [{ type: "text", text: `Already active: ${summary}\n${abs}` }], details: {} };
+				return {
+					content: [{ type: "text", text: `Already active: ${summary}\n${abs}` }],
+					details: { planPath: abs, renderSummary: `already active: ${summary}` },
+				};
 			}
 			const dest = activatePlan(abs, ctx.cwd);
 			const summary = planSummary(dest);
@@ -1162,8 +1220,12 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			const countNote = activeCount > 1 ? ` (${activeCount} plans now active)` : "";
 			return {
 				content: [{ type: "text", text: `Activated: ${summary}${countNote}\n${dest}` }],
-				details: { planPath: dest },
+				details: { planPath: dest, renderSummary: `activated: ${summary}${countNote}` },
 			};
+		},
+
+		renderResult(result, _options, theme) {
+			return renderInlinePlanResult(result, theme);
 		},
 	});
 }
