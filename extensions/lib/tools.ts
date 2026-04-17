@@ -7,6 +7,7 @@ import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDi
 import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog, clearVerificationMarkers, hasPreparedVerification, hasVerified, markVerificationPrepared, markVerified } from "./format.js";
 import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
 import type { SessionState } from "./types.js";
+import { userLanguageRule } from "./prompting.js";
 
 interface BrainstormQuestion {
 	id: string;
@@ -68,7 +69,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"Start researching a topic and save findings in a persistent research document. " +
 			"Use this only when the task is non-trivial and genuinely needs investigation before you can proceed. " +
 			"For simple questions, direct answers, or small one-shot edits, do not open a research document. " +
-			"When linked to a plan, files go in the plan's research/ subfolder; otherwise .pi/plans/research/_standalone/.",
+			"When linked to a plan, files go in the plan's research/ subfolder; otherwise .pi/plans/research/_standalone/. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			topic: Type.String({ description: "What you need to research, e.g. 'OAuth 2.0 PKCE flow best practices'" }),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path to log to (default: active plan, if any)" })),
@@ -117,6 +119,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"",
 				`**Research document created:** ${relPath}`,
 				"",
+				userLanguageRule,
+				"",
 				"Investigate this topic thoroughly and write only the findings that materially affect the task.",
 				"",
 				"Use this tool for non-trivial investigation. If the issue turns out to be straightforward, stop here and continue directly instead of expanding the research scope.",
@@ -148,7 +152,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"Do not use it for ordinary chat, simple direct questions, or one-shot edits. " +
 			"Each question can have suggested options, but always includes free-text input. " +
 			"Use `recommended` to mark the best option (shown with ★, cursor defaults to it). " +
-			"Batch related questions into one call. Returns Q&A records.",
+			"Batch related questions into one call. Returns Q&A records. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			questions: Type.Array(
 				Type.Object({
@@ -603,7 +608,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"Create a new plan document with a goal, architecture overview, and detailed steps. " +
 			"Use after researching the codebase and agreeing on the approach with the user. " +
 			"Each step should be a single concrete action. Include: affected files, what to do, and how to verify. " +
-			"Code snippets and exact commands are encouraged but not mandatory for every step.",
+			"Code snippets and exact commands are encouraged but not mandatory for every step. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			name: Type.String({ description: "Short plan name, e.g. 'auth-refactor'" }),
 			goal: Type.String({ description: "1-3 sentence description of what this builds" }),
@@ -707,7 +713,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan execute",
 		description:
 			"Begin executing the active plan. Reads the plan and returns it with execution guidelines. " +
-			"Call this after plan_create activates a plan, or when resuming work on an active plan.",
+			"Call this after plan_create activates a plan, or when resuming work on an active plan. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
@@ -722,6 +729,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 
 			const guidelines = [
 				"## Execution Guidelines",
+				"",
+				userLanguageRule,
 				"",
 				"Execute the plan step by step. For each step:",
 				"1. `plan_update(log: \"Starting step N: ...\")` — log what you're about to do",
@@ -779,7 +788,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		description:
 			"Update the active plan. Can complete a step, add a step, or append a log entry. " +
 			"Multiple actions can be combined in one call. " +
-			"Operates on the active plan by default.",
+			"Operates on the active plan by default. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			complete_step: Type.Optional(Type.Integer({
 				minimum: 1,
@@ -843,7 +853,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 	pi.registerTool({
 		name: "plan_log",
 		label: "plan log",
-		description: "Add a log entry to the plan's log.md.",
+		description: "Add a log entry to the plan's log.md. " + userLanguageRule,
 		parameters: Type.Object({
 			message: Type.String({ description: "The log message to append" }),
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
@@ -868,7 +878,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			"Typically called after steps are complete, before plan_prepare_to_verify — but can be used mid-execution too. " +
 			"After calling this tool: run an external review (codex, gemini, etc.), write findings into the review doc, " +
 			"discuss with the user, make fixes, then write your responses into the Response section. " +
-			"Multiple rounds are supported — call again for each round.",
+			"Multiple rounds are supported — call again for each round. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
 		}),
@@ -902,6 +913,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"",
 				`**Review document created:** ${relFromCwd}`,
 				"",
+				userLanguageRule,
+				"",
 				"### Steps",
 				"",
 				"1. **Run external review** — pipe the relevant diff/files to an external reviewer (codex, gemini, or similar) via bash",
@@ -929,7 +942,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		description:
 			"Present the automated verification results and manual checklist that the user must test next. " +
 			"Call this after implementation and automated checks are complete, before the user performs manual verification. " +
-			"After the user reports the outcome, call plan_verify to record approval or requested changes.",
+			"After the user reports the outcome, call plan_verify to record approval or requested changes. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			automated_results: Type.String({
 				description: "Summary of automated test/build/lint results you already ran. Include commands executed, pass/fail counts, and any failures.",
@@ -965,6 +979,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 					text: [
 						`Verification ready: ${planPath}`,
 						"",
+						userLanguageRule,
+						"",
 						"Automated test results:",
 						params.automated_results,
 						"",
@@ -986,7 +1002,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan verify",
 		description:
 			"Record the outcome of manual verification after the user has completed the checks prepared by plan_prepare_to_verify. " +
-			"Call this BEFORE plan_finish. If the user approves, the plan becomes finishable. If the user requests changes, fix them and run plan_prepare_to_verify again later.",
+			"Call this BEFORE plan_finish. If the user approves, the plan becomes finishable. If the user requests changes, fix them and run plan_prepare_to_verify again later. " +
+			userLanguageRule,
 		parameters: Type.Object({
 			status: Type.Union([
 				Type.Literal("approved"),

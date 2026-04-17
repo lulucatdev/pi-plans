@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getActivePlans } from "./state.js";
 import { extractPlanPath, isReadOnlyTool } from "./state.js";
 import type { SessionState } from "./types.js";
+import { userLanguageRule } from "./prompting.js";
 
 export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 	// -- System prompt (conditional) -----------------------------------------
@@ -24,7 +25,8 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 			return {
 				systemPrompt: event.systemPrompt +
 					`\n\n## Active Plan\n\nA planPath was provided: ${session.planGate.planPath}. ` +
-					"Read plan.md inside that folder before editing any files. Use `plan_update` to mark steps complete and log progress as you work.\n",
+					"Read plan.md inside that folder before editing any files. Use `plan_update` to mark steps complete and log progress as you work. " +
+					`${userLanguageRule}\n`,
 			};
 		}
 
@@ -41,6 +43,7 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 				"\n\n## Active Plans\n\n" +
 				`${plansList}\n` +
 				"Only use plan tracking when the current user request is actually part of one of these active plans. For unrelated one-shot work, continue normally and do not force plan tools.\n" +
+				`${userLanguageRule}\n` +
 				"If the request belongs to an active plan, read the plan before editing files. Use `plan_execute` to begin with full execution guidelines, or work through steps directly:\n" +
 				"- `plan_update(complete_step: N)` when you finish a step.\n" +
 				"- `plan_update(log: \"...\")` to record decisions, progress, or blockers.\n" +

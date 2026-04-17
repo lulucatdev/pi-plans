@@ -157,6 +157,7 @@ Directory = status. Moving a folder between directories is a state transition.
 - Full observability: the user can see and edit any file at any time.
 - No magic: plans are plain markdown, version-controllable, human-editable.
 - Research results persist alongside the plan they belong to.
+- Plan drafts, steps, research notes, reviews, and logs should match the user's language unless the user asks for a different language.
 - Logs are append-only — corrections are made by adding new entries.
 
 ## License

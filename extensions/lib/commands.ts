@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { plansDir, planFile, validatePlanPath } from "./utils.js";
 import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan, createDraftPlan } from "./state.js";
 import type { SessionState } from "./types.js";
+import { userLanguageSection } from "./prompting.js";
 
 export function registerCommands(pi: ExtensionAPI, session: SessionState): void {
 	pi.registerCommand("plans", {
@@ -24,6 +25,8 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			const topic = args?.trim() || "";
 			const prompt = [
 				"We are having a pure brainstorming session. No research phase, no plan creation — just a focused conversation to explore ideas.",
+				"",
+				userLanguageSection,
 				"",
 				"Use the `plan_brainstorm` tool for EVERY question. Do NOT use regular text messages to ask questions. Batch related questions into a single call — present 2-5 questions at once for a natural brainstorm flow. Always provide suggested options for each question.",
 				"",
@@ -49,6 +52,8 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			const topic = args?.trim() || "";
 			const prompt = [
 				"We are starting an open-ended brainstorming session. This is exploratory — we may or may not end up creating a formal plan.",
+				"",
+				userLanguageSection,
 				"",
 				"## Phase 1: Research",
 				"",
@@ -92,6 +97,8 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 			}
 			const prompt = [
 				"We are starting a planning session. Follow this pipeline in order:",
+				"",
+				userLanguageSection,
 				"",
 				`A draft plan folder has been created and focused: ${draftPath}`,
 				"All research will be saved inside this plan folder.",
