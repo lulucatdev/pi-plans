@@ -48,7 +48,7 @@ export function registerHooks(pi: ExtensionAPI, session: SessionState): void {
 				"- `plan_update(complete_step: N)` when you finish a step.\n" +
 				"- `plan_update(log: \"...\")` to record decisions, progress, or blockers.\n" +
 				"- `plan_update(add_step: \"...\")` if new work is discovered.\n" +
-				"- `plan_review` for external code review. `plan_prepare_to_verify` to hand manual checks to the user. `plan_verify` to record the user's result. `plan_finish` after verification. `plan_abort` if the plan is no longer viable.\n" +
+				"- `plan_review` for external code review. `plan_finish` after the user confirms satisfaction. `plan_abort` if the plan is no longer viable.\n" +
 				"\n**Research during execution:** Call `plan_research(topic)` only when the active plan requires non-trivial investigation. Skip it for straightforward edits or direct answers.\n" +
 				"**Pivot policy:** Execute faithfully by default. If you find a must-fix issue, discuss with the user before changing course.\n",
 		};

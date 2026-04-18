@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parseSteps, completeStep, addStep, parseManualAcceptance, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog, markAsDraft, clearVerificationMarkers, hasPreparedVerification, hasVerified, markVerificationPrepared, markVerified } from "../extensions/lib/format.js";
+import { parseSteps, completeStep, addStep, renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, appendLog, markAsDraft } from "../extensions/lib/format.js";
 
 const samplePlan = `# Test Plan
 
@@ -17,15 +17,6 @@ const samplePlan = `# Test Plan
 - [x] Step one done
 - [ ] **Step two current** ← current
 - [ ] Step three pending
-
-## Verification
-
-### Automated Checks
-- \`npm test\`
-
-### Manual Acceptance
-- [ ] Feature works correctly
-- [ ] No regressions
 `;
 
 describe("parseSteps", () => {
@@ -155,30 +146,6 @@ describe("appendLog", () => {
 	});
 });
 
-describe("parseManualAcceptance", () => {
-	it("extracts items from ### Manual Acceptance", () => {
-		const items = parseManualAcceptance(samplePlan);
-		expect(items).toEqual(["Feature works correctly", "No regressions"]);
-	});
-
-	it("handles case-insensitive heading", () => {
-		const plan = "### manual acceptance\n- [ ] Item A\n- Item B\n## Other\n";
-		const items = parseManualAcceptance(plan);
-		expect(items).toEqual(["Item A", "Item B"]);
-	});
-
-	it("returns empty array when section missing", () => {
-		const items = parseManualAcceptance("# Just a title\n");
-		expect(items).toEqual([]);
-	});
-
-	it("handles numbered lists", () => {
-		const plan = "### Manual Acceptance\n1. First\n2. Second\n## Other\n";
-		const items = parseManualAcceptance(plan);
-		expect(items).toEqual(["First", "Second"]);
-	});
-});
-
 describe("renderPlan", () => {
 	it("generates plan with goal and steps, no log section", () => {
 		const result = renderPlan("Test", "Build a thing", ["Step A", "Step B"]);
@@ -194,22 +161,6 @@ describe("renderPlan", () => {
 		const result = renderPlan("T", "G", ["S"], "Use microservices");
 		expect(result).toContain("**Architecture:** Use microservices");
 	});
-
-	it("includes verification section when provided", () => {
-		const result = renderPlan("T", "G", ["S"], undefined, {
-			automated: ["npm test"],
-			manual: ["Check UI"],
-		});
-		expect(result).toContain("### Automated Checks");
-		expect(result).toContain("- `npm test`");
-		expect(result).toContain("### Manual Acceptance");
-		expect(result).toContain("- [ ] Check UI");
-	});
-
-	it("omits verification section when empty", () => {
-		const result = renderPlan("T", "G", ["S"]);
-		expect(result).not.toContain("## Verification");
-	});
 });
 
 describe("markAsDraft", () => {
@@ -221,28 +172,6 @@ describe("markAsDraft", () => {
 	it("does not duplicate an existing draft marker", () => {
 		const result = markAsDraft("# Test\n\nBody\n\n<!-- DRAFT -->\n\n");
 		expect(result).toBe("# Test\n\nBody\n\n<!-- DRAFT -->\n");
-	});
-});
-
-describe("verification markers", () => {
-	it("marks a plan as ready for manual verification", () => {
-		const result = markVerificationPrepared("# Test\n");
-		expect(hasPreparedVerification(result)).toBe(true);
-		expect(hasVerified(result)).toBe(false);
-	});
-
-	it("marks a prepared plan as verified", () => {
-		const prepared = markVerificationPrepared("# Test\n");
-		const verified = markVerified(prepared);
-		expect(hasPreparedVerification(verified)).toBe(false);
-		expect(hasVerified(verified)).toBe(true);
-	});
-
-	it("clears both verification markers", () => {
-		const content = "# Test\n\n<!-- VERIFICATION_READY -->\n\n<!-- VERIFIED -->\n";
-		const cleared = clearVerificationMarkers(content);
-		expect(hasPreparedVerification(cleared)).toBe(false);
-		expect(hasVerified(cleared)).toBe(false);
 	});
 });
 

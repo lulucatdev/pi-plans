@@ -4,8 +4,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { ensureDir, pendingDir, activeDir, plansDir, researchDir, planResearchDir, planReviewDir, planFile, logFile, extractSlugFromPlanPath, ts, slugify, safeDestPath, validatePlanPath } from "./utils.js";
-import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, parseManualAcceptance, completeStep, addStep, appendLog, clearVerificationMarkers, hasPreparedVerification, hasVerified, markVerificationPrepared, markVerified } from "./format.js";
-import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan } from "./state.js";
+import { renderPlan, renderResearchDoc, renderReviewDoc, renderLogHeader, parseSteps, completeStep, addStep, appendLog } from "./format.js";
+import { getActivePlans, getActivePlan, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan, startReviewRound } from "./state.js";
 import type { SessionState } from "./types.js";
 import { userLanguageRule } from "./prompting.js";
 
@@ -64,7 +64,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan focus",
 		description:
 			"Bind this session to a specific plan. After focusing, all plan tools " +
-			"(plan_update, plan_execute, plan_verify, etc.) default to this plan " +
+			"(plan_update, plan_execute, plan_finish, etc.) default to this plan " +
 			"without needing plan_path on every call. Useful when multiple plans are active.",
 		parameters: Type.Object({
 			plan_path: Type.String({ description: "Path to the plan folder to focus on" }),
@@ -648,18 +648,10 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 					"1) what to do, 2) which files are affected, 3) how to verify it worked. " +
 					"Include code snippets and commands where they add clarity. Avoid vague steps like 'add validation' — be specific about what and where.",
 			}),
-			verification: Type.Optional(Type.Object({
-				automated: Type.Optional(Type.Array(Type.String(), {
-					description: "Commands to run for automated verification, e.g. 'npm test', 'npm run build', 'npm run lint'",
-				})),
-				manual: Type.Optional(Type.Array(Type.String(), {
-					description: "Items for the user to manually verify, e.g. 'OAuth login flow works with Google', 'Error page renders correctly'",
-				})),
-			}, { description: "Verification criteria defined upfront. Automated commands + manual acceptance checklist. Used by plan_prepare_to_verify and plan_verify at the end." })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const title = params.name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-			const planContent = renderPlan(title, params.goal, params.steps, params.architecture, params.verification);
+			const planContent = renderPlan(title, params.goal, params.steps, params.architecture);
 			const activateNow = params.activate !== false;
 
 			const finalizePlanPath = (planPath: string): string => {
@@ -792,9 +784,8 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 				"### Finishing Up",
 				"When all steps are complete:",
 				"1. **Review** — call `plan_review` to start a code review round. Run an external reviewer, document findings and responses.",
-				"2. **Prepare verification** — run ALL automated checks (full test suite, build, lint). Call `plan_prepare_to_verify` with the results and checklist, then wait for the user's manual verification.",
-				"3. **Record the outcome** — after the user reports manual verification, call `plan_verify` with status `approved` or `changes_requested`.",
-				"4. **Finish** — only call `plan_finish` after `plan_verify` records approval.",
+				"2. **Ask user to verify** — present a summary of what was built and what the user should test. Wait for the user to confirm.",
+				"3. **Finish** — once the user confirms everything looks good, call `plan_finish` to complete the plan.",
 			].join("\n");
 
 			return {
@@ -841,11 +832,6 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 			if (params.add_step) {
 				const afterIdx = params.after_step !== undefined ? params.after_step - 1 : undefined;
 				content = addStep(content, params.add_step, afterIdx);
-			}
-
-			// Invalidate verification when steps change (not on log-only updates)
-			if (params.complete_step !== undefined || params.add_step) {
-				content = clearVerificationMarkers(content);
 			}
 
 			fs.writeFileSync(planFile(planPath), content, "utf-8");
@@ -909,7 +895,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan review",
 		description:
 			"Start a code review round. Creates a review document in the plan's reviews/ subfolder. " +
-			"Typically called after steps are complete, before plan_prepare_to_verify — but can be used mid-execution too. " +
+			"Typically called after steps are complete, before asking the user to verify — but can be used mid-execution too. " +
 			"After calling this tool: run an external review (codex, gemini, etc.), write findings into the review doc, " +
 			"discuss with the user, make fixes, then write your responses into the Response section. " +
 			"Multiple rounds are supported — call again for each round. " +
@@ -919,27 +905,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			const content = fs.readFileSync(planFile(planPath), "utf-8");
-			const titleMatch = content.match(/^# (.+)/m);
-			const planName = titleMatch?.[1] ?? path.basename(planPath);
-
-			// Determine round number from existing review files (parse max round from filenames)
-			const rvDir = planReviewDir(planPath);
-			ensureDir(rvDir);
-			const existing = fs.existsSync(rvDir) ? fs.readdirSync(rvDir).filter((f) => f.endsWith(".md")) : [];
-			let maxRound = 0;
-			for (const f of existing) {
-				const m = f.match(/round-(\d+)\.md$/);
-				if (m) maxRound = Math.max(maxRound, parseInt(m[1], 10));
-			}
-			const round = maxRound + 1;
-
-			// Create review document
-			const reviewFile = safeDestPath(path.join(rvDir, `${ts()}-round-${round}.md`));
-			fs.writeFileSync(reviewFile, renderReviewDoc(round, planName), "utf-8");
-
-			const relPath = path.relative(planPath, reviewFile);
-			appendLog(logFile(planPath), `Code review round ${round} started → ${relPath}`);
+			const { reviewFile, round } = startReviewRound(planPath, ctx.cwd);
 
 			const relFromCwd = path.relative(ctx.cwd, reviewFile);
 			const guidance = [
@@ -968,123 +934,6 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		},
 	});
 
-	// -- plan_prepare_to_verify ---------------------------------------------
-
-	pi.registerTool({
-		name: "plan_prepare_to_verify",
-		label: "plan prepare to verify",
-		description:
-			"Present the automated verification results and manual checklist that the user must test next. " +
-			"Call this after implementation and automated checks are complete, before the user performs manual verification. " +
-			"After the user reports the outcome, call plan_verify to record approval or requested changes. " +
-			userLanguageRule,
-		parameters: Type.Object({
-			automated_results: Type.String({
-				description: "Summary of automated test/build/lint results you already ran. Include commands executed, pass/fail counts, and any failures.",
-			}),
-			acceptance_checklist: Type.Optional(Type.Array(Type.String(), {
-				description: "Manual acceptance items. If omitted, reads from the plan's '## Verification / ### Manual Acceptance' section.",
-			})),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
-		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planFile(planPath), "utf-8");
-
-			let checklist = params.acceptance_checklist;
-			if (!checklist || checklist.length === 0) {
-				checklist = parseManualAcceptance(content);
-			}
-			if (!checklist || checklist.length === 0) {
-				checklist = ["All features work as described in the plan goal"];
-			}
-
-			content = markVerificationPrepared(content);
-			fs.writeFileSync(planFile(planPath), content, "utf-8");
-			appendLog(logFile(planPath), `Verification prepared. Automated: ${params.automated_results.split("\n")[0]}`);
-
-			const checklistText = checklist
-				.map((item, i) => `${i + 1}. ${item}`)
-				.join("\n");
-
-			return {
-				content: [{
-					type: "text",
-					text: [
-						`Verification ready: ${planPath}`,
-						"",
-						userLanguageRule,
-						"",
-						"Automated test results:",
-						params.automated_results,
-						"",
-						"Manual acceptance checklist:",
-						checklistText,
-						"",
-						"Ask the user to perform these checks. After the user reports the outcome, call `plan_verify` with status `approved` or `changes_requested`.",
-					].join("\n"),
-				}],
-				details: { planPath, checklist, prepared: true },
-			};
-		},
-	});
-
-	// -- plan_verify ---------------------------------------------------------
-
-	pi.registerTool({
-		name: "plan_verify",
-		label: "plan verify",
-		description:
-			"Record the outcome of manual verification after the user has completed the checks prepared by plan_prepare_to_verify. " +
-			"Call this BEFORE plan_finish. If the user approves, the plan becomes finishable. If the user requests changes, fix them and run plan_prepare_to_verify again later. " +
-			userLanguageRule,
-		parameters: Type.Object({
-			status: Type.Union([
-				Type.Literal("approved"),
-				Type.Literal("changes_requested"),
-			], {
-				description: "Outcome after the user completes manual verification.",
-			}),
-			feedback: Type.Optional(Type.String({
-				description: "Optional notes from the user. Useful for manual test observations or requested fixes.",
-			})),
-			plan_path: Type.Optional(Type.String({ description: "Explicit plan folder path (default: active plan)" })),
-		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const planPath = resolvePlanArg(params.plan_path, ctx.cwd, session.focusedPlan);
-			let content = fs.readFileSync(planFile(planPath), "utf-8");
-
-			if (hasVerified(content) && !hasPreparedVerification(content) && params.status === "approved") {
-				return {
-					content: [{ type: "text", text: "Verification is already recorded. Call `plan_finish` to complete the plan." }],
-					details: { planPath, verified: true },
-				};
-			}
-
-			if (!hasPreparedVerification(content)) {
-				throw new Error("Verification is not prepared. Run plan_prepare_to_verify first.");
-			}
-
-			if (params.status === "approved") {
-				content = markVerified(content);
-				fs.writeFileSync(planFile(planPath), content, "utf-8");
-				appendLog(logFile(planPath), params.feedback ? `Verification passed. User approved. Notes: ${params.feedback}` : "Verification passed. User approved.");
-				return {
-					content: [{ type: "text", text: "Verification passed. Call `plan_finish` to complete the plan." }],
-					details: { planPath, verified: true },
-				};
-			}
-
-			content = clearVerificationMarkers(content);
-			fs.writeFileSync(planFile(planPath), content, "utf-8");
-			appendLog(logFile(planPath), `Verification failed. User feedback: ${params.feedback ?? "(no details)"}`);
-			return {
-				content: [{ type: "text", text: `Verification failed. Fix the issues and run \`plan_prepare_to_verify\` again when ready.\nUser feedback: ${params.feedback ?? "(no details)"}` }],
-				details: { planPath, verified: false },
-			};
-		},
-	});
-
 	// -- plan_finish ---------------------------------------------------------
 
 	pi.registerTool({
@@ -1092,7 +941,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		label: "plan finish",
 		description:
 			"Mark the active plan as completed. Logs a completion entry and moves it to done/. " +
-			"You should call plan_prepare_to_verify and plan_verify BEFORE this to run the acceptance phase. " +
+			"Only call this after the user has confirmed the implementation is satisfactory. " +
 			"Provide a detailed completion summary so the final result and log clearly describe what was delivered.",
 		parameters: Type.Object({
 			summary: Type.Optional(Type.String({ description: "Detailed completion summary to log and show in the final result" })),
@@ -1151,7 +1000,7 @@ export function registerTools(pi: ExtensionAPI, session: SessionState): void {
 		name: "plan_resume",
 		label: "plan resume",
 		description:
-			"Resume a pending, done, or aborted plan. Moves it to active/, clears stale verification, " +
+			"Resume a pending, done, or aborted plan. Moves it to active/ and logs a resumption entry. " +
 			"and logs a resumption entry. Multiple plans can be active simultaneously.",
 		parameters: Type.Object({
 			plan_path: Type.String({ description: "Path to the plan folder (in pending/, done/, or aborted/)" }),

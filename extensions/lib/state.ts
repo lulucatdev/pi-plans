@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, validatePlanPath, ts, slugify } from "./utils.js";
-import { parseSteps, appendLog, renderDraftPlan, renderLogHeader, clearVerificationMarkers, hasVerified } from "./format.js";
+import { activeDir, pendingDir, doneDir, abortedDir, ensureDir, safeDestPath, planFile, logFile, planReviewDir, validatePlanPath, ts, slugify } from "./utils.js";
+import { parseSteps, appendLog, renderDraftPlan, renderLogHeader, renderReviewDoc } from "./format.js";
 import type { PlanEntry, SessionState } from "./types.js";
 
 /** Shared mutable session state. */
@@ -126,15 +126,37 @@ export function finishPlan(planPath: string, cwd: string, session: SessionState,
 	if (incomplete.length > 0) {
 		throw new Error(`Cannot finish: ${incomplete.length} step(s) still incomplete. Complete all steps or use plan_abort.`);
 	}
-	if (!hasVerified(content)) {
-		throw new Error("Cannot finish: no verification record found. Run plan_prepare_to_verify and plan_verify first, or use plan_abort to skip.");
-	}
 	appendLog(logFile(planPath), summary ? `Plan completed. ${summary}` : "Plan completed.");
 	const dest = safeDestPath(path.join(doneDir(cwd), path.basename(planPath)));
 	ensureDir(doneDir(cwd));
 	fs.renameSync(planPath, dest);
 	if (session.focusedPlan && path.resolve(session.focusedPlan) === path.resolve(planPath)) session.focusedPlan = undefined;
 	return dest;
+}
+
+/** Start a code review round for a plan. Creates review doc, logs it. Returns { reviewFile, round, planName }. */
+export function startReviewRound(planPath: string, cwd: string): { reviewFile: string; round: number; planName: string } {
+	const content = fs.readFileSync(planFile(planPath), "utf-8");
+	const titleMatch = content.match(/^# (.+)/m);
+	const planName = titleMatch?.[1] ?? path.basename(planPath);
+
+	const rvDir = planReviewDir(planPath);
+	ensureDir(rvDir);
+	const existing = fs.existsSync(rvDir) ? fs.readdirSync(rvDir).filter((f) => f.endsWith(".md")) : [];
+	let maxRound = 0;
+	for (const f of existing) {
+		const m = f.match(/round-(\d+)\.md$/);
+		if (m) maxRound = Math.max(maxRound, parseInt(m[1], 10));
+	}
+	const round = maxRound + 1;
+
+	const reviewFile = safeDestPath(path.join(rvDir, `${ts()}-round-${round}.md`));
+	fs.writeFileSync(reviewFile, renderReviewDoc(round, planName), "utf-8");
+
+	const relPath = path.relative(planPath, reviewFile);
+	appendLog(logFile(planPath), `Code review round ${round} started → ${relPath}`);
+
+	return { reviewFile, round, planName };
 }
 
 /** Abort a plan: log reason, move to aborted/. Returns dest path. */
@@ -147,7 +169,7 @@ export function abortPlan(planPath: string, cwd: string, session: SessionState, 
 	return dest;
 }
 
-/** Resume a plan from pending/done/aborted to active/. Clears stale verification. Returns dest path. */
+/** Resume a plan from pending/done/aborted to active/. Returns dest path. */
 export function resumePlan(planPath: string, cwd: string, reason?: string): string {
 	validatePlanPath(planPath, cwd);
 	if (!fs.existsSync(planPath)) throw new Error(`Plan not found: ${planPath}`);
@@ -156,9 +178,6 @@ export function resumePlan(planPath: string, cwd: string, reason?: string): stri
 	if (parentDir !== "pending" && parentDir !== "done" && parentDir !== "aborted") {
 		throw new Error(`Can only resume plans from pending/, done/, or aborted/, not ${parentDir}/`);
 	}
-	let content = fs.readFileSync(planFile(planPath), "utf-8");
-	content = clearVerificationMarkers(content);
-	fs.writeFileSync(planFile(planPath), content, "utf-8");
 	appendLog(logFile(planPath), reason ? `Plan resumed. ${reason}` : "Plan resumed.");
 	const dest = safeDestPath(path.join(activeDir(cwd), path.basename(planPath)));
 	ensureDir(activeDir(cwd));

@@ -8,10 +8,9 @@
  * living document throughout development.
  *
  * Tools:  plan_focus, plan_research, plan_brainstorm, plan_create, plan_execute,
- *         plan_update, plan_log, plan_review, plan_prepare_to_verify, plan_verify,
- *         plan_finish, plan_abort,
+ *         plan_update, plan_log, plan_review, plan_finish, plan_abort,
  *         plan_resume, plan_list, plan_activate
- * Commands: /plans, /start-plan, /finish-plan, /abort-plan, /resume-plan,
+ * Commands: /plans, /start-plan, /finish-plan, /plan-review, /abort-plan, /resume-plan,
  *           /activate-plan, /deactivate-plan
  */
 

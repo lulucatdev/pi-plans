@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import { logTs } from "./utils.js";
-import type { Step, Verification } from "./types.js";
+import type { Step } from "./types.js";
 
-export const VERIFIED_MARKER = "<!-- VERIFIED -->";
-export const VERIFICATION_READY_MARKER = "<!-- VERIFICATION_READY -->";
-
-export function renderPlan(title: string, goal: string, steps: string[], architecture?: string, verification?: Verification): string {
+export function renderPlan(title: string, goal: string, steps: string[], architecture?: string): string {
 	const lines: string[] = [];
 	lines.push(`# ${title}`);
 	lines.push("");
@@ -27,50 +24,7 @@ export function renderPlan(title: string, goal: string, steps: string[], archite
 		lines.push(`- [ ] ${marker}${steps[i]}${marker}${arrow}`);
 	}
 	lines.push("");
-	if (verification && (verification.automated?.length || verification.manual?.length)) {
-		lines.push("## Verification");
-		lines.push("");
-		if (verification.automated?.length) {
-			lines.push("### Automated Checks");
-			for (const cmd of verification.automated) {
-				lines.push(`- \`${cmd}\``);
-			}
-			lines.push("");
-		}
-		if (verification.manual?.length) {
-			lines.push("### Manual Acceptance");
-			for (const item of verification.manual) {
-				lines.push(`- [ ] ${item}`);
-			}
-			lines.push("");
-		}
-	}
 	return lines.join("\n");
-}
-
-/** Extract manual acceptance items from plan content. Case-insensitive, tolerates formatting variations. */
-export function parseManualAcceptance(content: string): string[] {
-	const lines = content.split("\n");
-	let inSection = false;
-	const items: string[] = [];
-
-	for (const line of lines) {
-		if (/^#{2,4}\s+manual\s+acceptance/i.test(line)) {
-			inSection = true;
-			continue;
-		}
-		if (inSection && (/^#{2,4}\s+/.test(line) || /^---+\s*$/.test(line))) {
-			break;
-		}
-		if (!inSection) continue;
-
-		const m = line.match(/^\s*(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s+)?(.+)/);
-		if (m) {
-			const text = m[1].replace(/\*\*/g, "").trim();
-			if (text) items.push(text);
-		}
-	}
-	return items;
 }
 
 /** Parse step lines from plan content. Only parses checkboxes within the ## Steps section. */
@@ -182,30 +136,6 @@ export function renderDraftPlan(title: string): string {
 export function markAsDraft(content: string): string {
 	const withoutMarker = content.replace(/\n*<!-- DRAFT -->\s*$/, "").trimEnd();
 	return `${withoutMarker}\n\n<!-- DRAFT -->\n`;
-}
-
-export function hasVerified(content: string): boolean {
-	return content.includes(VERIFIED_MARKER);
-}
-
-export function hasPreparedVerification(content: string): boolean {
-	return content.includes(VERIFICATION_READY_MARKER);
-}
-
-export function clearVerificationMarkers(content: string): string {
-	return content
-		.replaceAll(VERIFIED_MARKER, "")
-		.replaceAll(VERIFICATION_READY_MARKER, "");
-}
-
-export function markVerificationPrepared(content: string): string {
-	const cleared = clearVerificationMarkers(content).trimEnd();
-	return `${cleared}\n\n${VERIFICATION_READY_MARKER}\n`;
-}
-
-export function markVerified(content: string): string {
-	const cleared = clearVerificationMarkers(content).trimEnd();
-	return `${cleared}\n\n${VERIFIED_MARKER}\n`;
 }
 
 export function renderReviewDoc(round: number, planName?: string): string {

@@ -4,7 +4,6 @@ import path from "node:path";
 import os from "node:os";
 import { registerTools } from "../extensions/lib/tools.js";
 import { activeDir, pendingDir, planFile, logFile } from "../extensions/lib/utils.js";
-import { VERIFICATION_READY_MARKER, VERIFIED_MARKER } from "../extensions/lib/format.js";
 import type { SessionState } from "../extensions/lib/types.js";
 
 interface ToolSpec {
@@ -84,39 +83,6 @@ describe("plan tools", () => {
 		expect(fs.existsSync(planFile(planPath))).toBe(true);
 		expect(session.focusedPlan).toBeUndefined();
 		expect(result.content[0].text).toContain("saved for later");
-	});
-
-	it("uses explicit verification preparation before recording approval", async () => {
-		const created = await tools.get("plan_create")!.execute("1", {
-			name: "auth-refactor",
-			goal: "Refactor authentication.",
-			steps: ["Update the auth module and verify with tests."],
-			verification: {
-				manual: ["Login succeeds with a valid account"],
-			},
-		}, undefined, undefined, ctx);
-		const planPath = created.details.planPath as string;
-
-		await expect(
-			tools.get("plan_verify")!.execute("2", { status: "approved" }, undefined, undefined, ctx),
-		).rejects.toThrow("Run plan_prepare_to_verify first");
-
-		const prepared = await tools.get("plan_prepare_to_verify")!.execute("3", {
-			automated_results: "npm test: 12 passed",
-		}, undefined, undefined, ctx);
-		expect(prepared.content[0].text).toContain("Ask the user to perform these checks");
-		expect(fs.readFileSync(planFile(planPath), "utf-8")).toContain(VERIFICATION_READY_MARKER);
-		expect(fs.readFileSync(logFile(planPath), "utf-8")).toContain("Verification prepared");
-
-		const verified = await tools.get("plan_verify")!.execute("4", {
-			status: "approved",
-			feedback: "Manual checks passed.",
-		}, undefined, undefined, ctx);
-		expect(verified.content[0].text).toContain("plan_finish");
-
-		const content = fs.readFileSync(planFile(planPath), "utf-8");
-		expect(content).not.toContain(VERIFICATION_READY_MARKER);
-		expect(content).toContain(VERIFIED_MARKER);
 	});
 
 	it("renders plan_log results with the logged message inline", async () => {
@@ -207,18 +173,10 @@ describe("plan tools", () => {
 			name: "auth-refactor",
 			goal: "Refactor authentication.",
 			steps: ["Update the auth module and verify with tests."],
-			verification: { manual: ["Login succeeds with a valid account"] },
 		}, undefined, undefined, ctx);
 		await tools.get("plan_update")!.execute("2", { complete_step: 1 }, undefined, undefined, ctx);
-		await tools.get("plan_prepare_to_verify")!.execute("3", {
-			automated_results: "npm test: 12 passed",
-		}, undefined, undefined, ctx);
-		await tools.get("plan_verify")!.execute("4", {
-			status: "approved",
-			feedback: "Manual checks passed.",
-		}, undefined, undefined, ctx);
 
-		const result = await tools.get("plan_finish")!.execute("5", {
+		const result = await tools.get("plan_finish")!.execute("3", {
 			summary: "Moved the shared Exa integration into its own package, updated the registration flow, and verified the resulting plan workflow with automated and manual checks.",
 		}, undefined, undefined, ctx);
 		expect(result.content[0].text).toContain("Plan completed: auth-refactor");

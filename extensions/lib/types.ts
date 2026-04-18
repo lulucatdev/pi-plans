@@ -6,11 +6,6 @@ export interface Step {
 	lineNum: number;
 }
 
-export interface Verification {
-	automated?: string[];
-	manual?: string[];
-}
-
 export interface PlanEntry {
 	name: string;
 	path: string;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { plansDir, planFile, validatePlanPath } from "./utils.js";
-import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan, createDraftPlan } from "./state.js";
+import { getActivePlans, resolvePlanArg, parkActivePlan, planSummary, listAllPlans, finishPlan, abortPlan, resumePlan, activatePlan, createDraftPlan, startReviewRound } from "./state.js";
 import type { SessionState } from "./types.js";
 import { userLanguageSection } from "./prompting.js";
 
@@ -116,9 +116,8 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				"1. **Clarify and explore** — batch questions about scope, constraints, ambiguities, and approach preferences. Provide multiple-choice options with context for trade-offs.",
 				"2. **Propose approaches** — present 2-3 approaches with trade-offs using `plan_brainstorm`. Put detailed explanations in the `context` parameter.",
 				"3. **Refine** — ask follow-up questions based on the chosen approach.",
-				"4. **Define verification** — ask what automated checks to run (build, test, lint commands) and what the user wants to manually verify. These become the plan's acceptance criteria.",
-				"5. **Confirm design** — before asking for approval, write the full proposed plan in a normal assistant message. Include the title, goal, architecture, every planned step with affected files and verification notes, and the verification checklist. The user should be able to review or edit the plan without opening any file.",
-				"6. **Ask for approval** — once the full draft is visible in chat, ask for approval with options like: 'Looks good, create the plan' / 'I have changes' / 'Start over'.",
+				"4. **Confirm design** — before asking for approval, write the full proposed plan in a normal assistant message. Include the title, goal, architecture, and every planned step with affected files and verification notes. The user should be able to review or edit the plan without opening any file.",
+				"5. **Ask for approval** — once the full draft is visible in chat, ask for approval with options like: 'Looks good, create the plan' / 'I have changes' / 'Start over'.",
 				"",
 				"## Phase 3: Create Plan",
 				"",
@@ -134,7 +133,6 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				"",
 				"**Principles:** DRY, YAGNI, frequent commits. Follow existing codebase patterns.",
 				"",
-				"**Verification criteria:** Include the `verification` parameter with automated commands and manual acceptance items defined during brainstorming.",
 				"",
 				"## Phase 4: Execute",
 				"",
@@ -160,6 +158,16 @@ export function registerCommands(pi: ExtensionAPI, session: SessionState): void 
 				const dest = finishPlan(planPath, ctx.cwd, session, args?.trim() || undefined);
 				ctx.ui.notify(`Completed: ${planSummary(dest)}`, "info");
 			} catch (e: any) { ctx.ui.notify(e.message, "error"); }
+		},
+	});
+
+	pi.registerCommand("plan-review", {
+		description: "Start a code review round for the active plan",
+		handler: async (_args, ctx) => {
+			let planPath: string;
+			try { planPath = resolvePlanArg(undefined, ctx.cwd, session.focusedPlan); } catch (e: any) { ctx.ui.notify(e.message, "warning"); return; }
+			const { reviewFile, round } = startReviewRound(planPath, ctx.cwd);
+			ctx.ui.notify(`Review round ${round} started: ${path.relative(ctx.cwd, reviewFile)}`, "info");
 		},
 	});
 
